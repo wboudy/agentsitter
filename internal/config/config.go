@@ -48,6 +48,13 @@ type Config struct {
 	DryRun bool `toml:"dry_run"`
 	// Learn records unrecognised prompts for later rule authoring.
 	Learn bool `toml:"learn"`
+	// SkipActivePane leaves the pane you are looking at alone.
+	SkipActivePane bool `toml:"skip_active_pane"`
+
+	// PauseFile is a kill switch. While it exists agentsitter keeps observing and
+	// logging but sends no keys. `agentsitter pause` and `agentsitter resume` manage
+	// it, and so can anything else that can create a file.
+	PauseFile string `toml:"pause_file"`
 
 	StateFile string   `toml:"state_file"`
 	AuditFile string   `toml:"audit_file"`
@@ -180,6 +187,7 @@ func Default() Config {
 		Settle:       Duration{800 * time.Millisecond},
 		DryRun:       false,
 		Learn:        true,
+		PauseFile:    "~/.local/state/agentsitter/paused",
 		StateFile:    "~/.local/state/agentsitter/state.json",
 		AuditFile:    "~/.local/state/agentsitter/audit.jsonl",
 		LearnDir:     "~/.local/state/agentsitter/learn",
@@ -312,7 +320,7 @@ func (c *Config) finalize() error {
 		c.Targets = []Target{DefaultTarget()}
 	}
 
-	for _, p := range []*string{&c.StateFile, &c.AuditFile, &c.LearnDir} {
+	for _, p := range []*string{&c.StateFile, &c.AuditFile, &c.LearnDir, &c.PauseFile} {
 		v, err := ExpandPath(*p)
 		if err != nil {
 			return err
