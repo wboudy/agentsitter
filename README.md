@@ -127,7 +127,7 @@ watches nothing while appearing to work.
 
 Two things about that filter are deliberate. The agent names are prefix
 matches because orchestrators routinely launch agents through a wrapper, so the
-process in tmux is something like `codex-dispatch` rather than `codex`; an
+process in tmux is something like `codex-wrapper` rather than `codex`; an
 anchored match would watch nothing while appearing to work. And the bare
 version-number pattern is not a typo: some agent CLIs run their binary from a
 version-named path, so tmux reports the process as something like `2.1.243`.
@@ -273,8 +273,8 @@ answered by rule
   confirm-proceed                 1
 
 answered by agent
-  wtf:1.1  (codex-dispatch)       7
-  wtf:2.3  (codex-dispatch)       4
+  agents:1.2  (codex)             7
+  agents:2.3  (codex)             4
 ```
 
 Running in `dry_run` makes this a clean measurement instrument: it records

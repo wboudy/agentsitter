@@ -156,7 +156,7 @@ func TestDefaultCommandsCoverVersionNamedBinaries(t *testing.T) {
 	// Orchestrators launch agents through wrappers, so the process name is
 	// often the agent name with a suffix. An anchored match would watch
 	// nothing here while still looking healthy.
-	for _, wrapper := range []string{"codex-dispatch", "codex", "claude-wrapper", "claude"} {
+	for _, wrapper := range []string{"codex-wrapper", "codex", "claude-launcher", "claude"} {
 		if !cfg.Targets[0].MatchesCommand(wrapper) {
 			t.Errorf("default command filters should match %q", wrapper)
 		}

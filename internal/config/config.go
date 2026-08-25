@@ -224,7 +224,7 @@ const DiscoverSockets = "*"
 //
 // The agent names are prefix matches on purpose. Orchestrators routinely launch
 // agents through a wrapper, so the process in tmux is something like
-// "codex-dispatch" rather than "codex"; an anchored match would watch nothing
+// "codex-wrapper" rather than "codex"; an anchored match would watch nothing
 // while appearing to work.
 //
 // The bare version-number pattern is not a typo either: some agent CLIs install
