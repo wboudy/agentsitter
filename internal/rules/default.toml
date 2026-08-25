@@ -31,7 +31,17 @@ description = "Choose a keep-waiting option over any alternative."
 priority = 120
 no_verify = true
 any = ['(?i)\bkeep waiting\b']
-options = ['(?i)^\s*(?:[❯▶▸●◆➤]\s*)?(?:\d+[.)]\s*)?keep waiting']
+# The phrase can sit anywhere in the label, as in "Dismiss and keep waiting",
+# so these do not anchor it to the start. They do require the line to be
+# option-shaped, carrying a list number or a pointer glyph, because this
+# dialog also prints the explanatory line "Codex will keep waiting, and this
+# menu will close when the response is ready", which is prose rather than a
+# choice. Matching that line would aim the cursor at nothing.
+options = [
+  '(?i)^\s*(?:[❯▶▸●◆➤›]\s*)?\d+[.)]\s+.*\bkeep waiting\b',
+  '(?i)^\s*[❯▶▸●◆➤]\s+.*\bkeep waiting\b',
+  '(?i)^\s*(?:\d+[.)]\s*)?(?:dismiss and\s+)?keep waiting\s*$',
+]
 
 # Decline every offer to move to a weaker or cheaper model. Ride the good model
 # down to zero instead.
@@ -48,8 +58,11 @@ any = [
   '(?i)\bdowngrade\b.*\bmodel\b',
   '(?i)\bmodel\b.*\bdowngrade\b',
   '(?i)approaching (?:your |the )?(?:weekly |monthly |usage )?limit',
+  '(?i)retry with a faster model',
+  '(?i)thinking a bit more about this request',
 ]
 options = [
+  '(?i)^\s*(?:[❯▶▸●◆➤›]\s*)?\d+[.)]\s+.*\b(?:dismiss and keep waiting|keep waiting)\b',
   '(?i)^\s*(?:[❯▶▸●◆➤]\s*)?(?:\d+[.)]\s*)?(?:no|not now|cancel)\b',
   '(?i)^\s*(?:[❯▶▸●◆➤]\s*)?(?:\d+[.)]\s*)?keep (?:current|using|my|the|waiting)',
   '(?i)^\s*(?:[❯▶▸●◆➤]\s*)?(?:\d+[.)]\s*)?stay on\b',
