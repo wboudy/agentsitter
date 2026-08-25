@@ -240,6 +240,7 @@ from typing, including a script, a hook, or you over ssh.
 | `once` | One sweep and exit; pair with `-dry-run` |
 | `panes` | Every pane and whether it is watched (`-a` shows skip reasons) |
 | `rules` | List active rules; `-dump` prints the built-in ruleset |
+| `stats` | How often prompts appear, by rule and by agent |
 | `learn` | Prompts no rule claimed yet |
 | `explain` | Trace one pane: flags per row, selection, matching rules |
 | `doctor` | Check config, rules, and target reachability |
@@ -247,6 +248,42 @@ from typing, including a script, a hook, or you over ssh.
 | `status` | Paths, limits, recent activity, quarantined panes |
 | `init` | Write a starter config |
 | `service` | Print a launchd or systemd unit |
+
+## Measuring how often this actually happens
+
+Every decision is logged, so the audit trail doubles as a record of how often
+your agents stall and on what.
+
+```sh
+agentsitter stats                 # last 24 hours
+agentsitter stats -since 168h     # last week
+agentsitter stats -json           # for graphing
+```
+
+```
+window     last 24.0 hours  (Aug 24 02:20 to Aug 25 02:20)
+prompts    11 answered, about one every 2.2 hours  (11.0 per day)
+events     14 total
+  answered           11
+  unresolved          2  (recognized, but no acceptable option was on screen)
+  unknown_prompt      1  (looked like a prompt, no rule claimed it)
+
+answered by rule
+  prefer-keep-waiting            10
+  confirm-proceed                 1
+
+answered by agent
+  wtf:1.1  (codex-dispatch)       7
+  wtf:2.3  (codex-dispatch)       4
+```
+
+Running in `dry_run` makes this a clean measurement instrument: it records
+every prompt it would have answered without touching anything, so you can find
+out how often agents are actually blocking before you let it type.
+
+One honest caveat on the numbers. This counts prompts agentsitter *saw*. A
+prompt that appears and is answered by a human before the next poll never
+enters the log, so treat the count as a floor rather than a census.
 
 ## Notifications
 

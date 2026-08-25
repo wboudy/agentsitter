@@ -37,6 +37,7 @@ Commands:
   once       Run a single sweep and exit
   panes      List panes on every target and whether they are watched
   rules      List the active rules, or print the built-in ruleset
+  stats      How often prompts appear, by rule and by agent
   learn      Show prompts that no rule claimed yet
   explain    Show what agentsitter sees in one pane and what it would do
   doctor     Check config, rules, and target reachability
@@ -73,6 +74,8 @@ func main() {
 		err = cmdRules(args)
 	case "learn":
 		err = cmdLearn(args)
+	case "stats":
+		err = cmdStats(args)
 	case "explain":
 		err = cmdExplain(args)
 	case "doctor":

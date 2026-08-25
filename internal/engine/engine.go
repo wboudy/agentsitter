@@ -35,6 +35,7 @@ const maxMove = 24
 type PaneClient interface {
 	ListPanes(ctx context.Context) ([]tmuxio.Pane, error)
 	Capture(ctx context.Context, paneID string, lines int) (string, error)
+	CaptureMany(ctx context.Context, paneIDs []string, lines int) (map[string]string, error)
 	SendKeys(ctx context.Context, paneID string, keys ...string) error
 }
 
@@ -65,6 +66,12 @@ type tracker struct {
 	fingerprint string
 	stable      int
 	lastSeen    time.Time
+
+	// quiet is the signature of the last event that did not change anything.
+	// Without it, a rule that recognizes a prompt it cannot answer re-reports
+	// itself on every single poll, which floods the log and would inflate any
+	// count taken from it.
+	quiet string
 }
 
 // Result summarises one sweep.
@@ -246,13 +253,47 @@ func (e *Engine) sweepTarget(ctx context.Context, target config.Target, res *Res
 	}
 
 	res.Panes += len(panes)
+
+	watched := make([]tmuxio.Pane, 0, len(panes))
+	ids := make([]string, 0, len(panes))
 	for _, pane := range panes {
 		if !e.watchable(target, pane) {
 			continue
 		}
-		res.Watched++
-		e.sweepPane(ctx, target, client, pane, res)
+		watched = append(watched, pane)
+		ids = append(ids, pane.ID)
 	}
+	res.Watched += len(watched)
+	if len(watched) == 0 {
+		return
+	}
+
+	screens := e.captureAll(ctx, client, ids)
+	for _, pane := range watched {
+		raw, ok := screens[pane.ID]
+		if !ok {
+			continue // pane vanished between listing and capture
+		}
+		e.sweepPane(ctx, target, client, pane, raw, res)
+	}
+}
+
+// captureAll reads every watched pane, preferring a single batched tmux
+// invocation and falling back to one call per pane when that fails, which
+// happens if a pane disappears mid-sweep.
+func (e *Engine) captureAll(ctx context.Context, client PaneClient, ids []string) map[string]string {
+	if screens, err := client.CaptureMany(ctx, ids, e.cfg.CaptureLines); err == nil {
+		return screens
+	}
+	screens := make(map[string]string, len(ids))
+	for _, id := range ids {
+		raw, err := client.Capture(ctx, id, e.cfg.CaptureLines)
+		if err != nil {
+			continue
+		}
+		screens[id] = raw
+	}
+	return screens
 }
 
 // watchable applies the target's filters to a pane.
@@ -276,7 +317,7 @@ func (e *Engine) watchable(t config.Target, p tmuxio.Pane) bool {
 	return true
 }
 
-func (e *Engine) sweepPane(ctx context.Context, target config.Target, client PaneClient, pane tmuxio.Pane, res *Result) {
+func (e *Engine) sweepPane(ctx context.Context, target config.Target, client PaneClient, pane tmuxio.Pane, raw string, res *Result) {
 	now := e.Now()
 	key := target.Label() + "/" + pane.ID
 
@@ -286,18 +327,6 @@ func (e *Engine) sweepPane(ctx context.Context, target config.Target, client Pan
 		Pane:     pane.ID,
 		PaneAddr: pane.Addr(),
 		Command:  pane.Command,
-	}
-
-	raw, err := client.Capture(ctx, pane.ID, e.cfg.CaptureLines)
-	if err != nil {
-		if errors.Is(err, tmuxio.ErrNoServer) {
-			return
-		}
-		ev := base
-		ev.Outcome = audit.OutcomeError
-		ev.Reason = err.Error()
-		e.emit(ctx, ev, res)
-		return
 	}
 
 	// A pane must look the same for several consecutive polls before it is
@@ -332,11 +361,32 @@ func (e *Engine) sweepPane(ctx context.Context, target config.Target, client Pan
 
 	for _, rule := range candidates {
 		ev, done := e.applyRule(ctx, client, rule, base, tail, key, text, now)
-		e.emit(ctx, ev, res)
+		if e.worthReporting(tr, ev, fp) {
+			e.emit(ctx, ev, res)
+		}
 		if done {
 			return
 		}
 	}
+}
+
+// worthReporting decides whether an event says anything new about a pane.
+//
+// Outcomes that changed something are always reported. Outcomes that did not,
+// such as a rule recognizing a prompt whose options it cannot find, are
+// reported once per distinct screen rather than on every poll.
+func (e *Engine) worthReporting(tr *tracker, ev audit.Event, fingerprint string) bool {
+	switch ev.Outcome {
+	case audit.OutcomeAnswered, audit.OutcomeVerifyFailed, audit.OutcomeAborted:
+		tr.quiet = ""
+		return true
+	}
+	sig := string(ev.Outcome) + "|" + ev.Rule + "|" + fingerprint
+	if tr.quiet == sig {
+		return false
+	}
+	tr.quiet = sig
+	return true
 }
 
 // maybeLearn records a screen that looks like a prompt but that no rule claims.

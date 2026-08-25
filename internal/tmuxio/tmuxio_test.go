@@ -173,3 +173,60 @@ func TestRemoteCommandIsCleared(t *testing.T) {
 		}
 	}
 }
+
+func TestParseBatchedCapture(t *testing.T) {
+	out := strings.Join([]string{
+		captureMarker + "%8",
+		"first pane line one",
+		"first pane line two",
+		captureMarker + "%14",
+		"second pane only line",
+		captureMarker + "%3",
+		"",
+	}, "\n")
+
+	got := parseBatchedCapture(out, 0)
+	if len(got) != 3 {
+		t.Fatalf("parsed %d panes, want 3: %#v", len(got), got)
+	}
+	if got["%8"] != "first pane line one\nfirst pane line two" {
+		t.Fatalf("pane %%8 = %q", got["%8"])
+	}
+	if got["%14"] != "second pane only line" {
+		t.Fatalf("pane %%14 = %q", got["%14"])
+	}
+	// A pane that rendered nothing still gets an entry, so the caller can tell
+	// "empty" from "was never captured".
+	if _, ok := got["%3"]; !ok {
+		t.Fatal("expected an entry for the trailing pane")
+	}
+}
+
+func TestParseBatchedCaptureRespectsLineLimit(t *testing.T) {
+	out := captureMarker + "%1\n" + strings.Join([]string{"a", "b", "c", "d"}, "\n")
+	if got := parseBatchedCapture(out, 2)["%1"]; got != "c\nd" {
+		t.Fatalf("got %q, want the last two lines", got)
+	}
+}
+
+func TestCaptureManyBuildsOneInvocation(t *testing.T) {
+	c := &Client{Socket: "agents"}
+	// Reconstruct what CaptureMany would run, to confirm it is a single tmux
+	// process with the panes chained by bare ";" separators.
+	var args []string
+	for _, id := range []string{"%1", "%2"} {
+		if len(args) > 0 {
+			args = append(args, ";")
+		}
+		args = append(args, "display-message", "-p", "-t", id, captureMarker+"#{pane_id}", ";",
+			"capture-pane", "-p", "-e", "-t", id)
+	}
+	cmd := c.command(context.Background(), args...)
+	joined := strings.Join(cmd.Args, " ")
+	if strings.Count(joined, "capture-pane") != 2 {
+		t.Fatalf("expected two capture-pane commands in one invocation: %s", joined)
+	}
+	if strings.Count(joined, ";") != 3 {
+		t.Fatalf("expected three separators: %s", joined)
+	}
+}

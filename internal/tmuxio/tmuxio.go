@@ -271,6 +271,74 @@ func TailLines(s string, n int) string {
 	return strings.Join(lines[len(lines)-n:], "\n")
 }
 
+// captureMarker prefixes the per-pane delimiter in a batched capture. It only
+// has to be a string that will not appear as an entire line of agent output.
+const captureMarker = "@@agentsitter-pane@@ "
+
+// CaptureMany captures several panes in a single tmux invocation.
+//
+// tmux accepts a sequence of commands separated by a bare ";" argument, so one
+// process can do the work of one per pane. That matters for more than speed.
+// Polling ten panes every few seconds means roughly a quarter of a million
+// process executions a day, which is both wasteful and the sort of volume that
+// stands out in endpoint monitoring. Batching cuts it by an order of magnitude,
+// and for a remote target it collapses the same number of ssh round trips.
+//
+// If the batch fails, which happens when a pane disappears mid-sweep, the
+// caller falls back to capturing panes one at a time.
+func (c *Client) CaptureMany(ctx context.Context, paneIDs []string, lines int) (map[string]string, error) {
+	if len(paneIDs) == 0 {
+		return map[string]string{}, nil
+	}
+
+	var args []string
+	for _, id := range paneIDs {
+		if len(args) > 0 {
+			args = append(args, ";")
+		}
+		// The pane id comes from tmux's own format rather than being pasted
+		// in. display-message runs its argument through strftime-style
+		// expansion, which silently eats the "%" that begins every tmux pane
+		// id and would leave the delimiter unmatchable.
+		args = append(args,
+			"display-message", "-p", "-t", id, captureMarker+"#{pane_id}", ";",
+			"capture-pane", "-p", "-e", "-t", id,
+		)
+	}
+
+	out, err := c.run(ctx, args...)
+	if err != nil {
+		return nil, err
+	}
+	return parseBatchedCapture(string(out), lines), nil
+}
+
+// parseBatchedCapture splits a batched capture back into per-pane screens.
+func parseBatchedCapture(out string, lines int) map[string]string {
+	result := map[string]string{}
+	var current string
+	var buf []string
+
+	flush := func() {
+		if current != "" {
+			result[current] = TailLines(strings.Join(buf, "\n"), lines)
+		}
+		buf = nil
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if id, ok := strings.CutPrefix(line, captureMarker); ok {
+			flush()
+			current = strings.TrimSpace(id)
+			continue
+		}
+		if current != "" {
+			buf = append(buf, line)
+		}
+	}
+	flush()
+	return result
+}
+
 // SendKeys sends named keys such as "Up", "Down", or "Enter" to a pane.
 func (c *Client) SendKeys(ctx context.Context, paneID string, keys ...string) error {
 	if len(keys) == 0 {

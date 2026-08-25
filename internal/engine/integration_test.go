@@ -24,6 +24,7 @@ import (
 	"github.com/wboudy/agentsitter/internal/config"
 	"github.com/wboudy/agentsitter/internal/guard"
 	"github.com/wboudy/agentsitter/internal/rules"
+	"github.com/wboudy/agentsitter/internal/tmuxio"
 )
 
 // tmuxSocket returns a socket name private to this test process.
@@ -192,4 +193,54 @@ func TestIntegrationDryRunLeavesMenuUntouched(t *testing.T) {
 	if got := capturePane(t, socket); strings.Contains(got, "ANSWERED:") {
 		t.Fatalf("a dry run must not answer the menu. pane:\n%s", got)
 	}
+}
+
+func TestIntegrationBatchedCaptureLabelsPanesCorrectly(t *testing.T) {
+	// Regression guard. tmux runs display-message through strftime-style
+	// expansion, which eats the "%" that begins every pane id. A delimiter
+	// built by string concatenation therefore came back as "0" instead of
+	// "%0", every pane looked uncaptured, and the engine silently stopped
+	// making any decision at all.
+	socket := startFakeAgent(t, "0")
+
+	client := &tmuxio.Client{Socket: socket}
+	panes, err := client.ListPanes(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := make([]string, 0, len(panes))
+	for _, p := range panes {
+		ids = append(ids, p.ID)
+	}
+
+	screens, err := client.CaptureMany(context.Background(), ids, 50)
+	if err != nil {
+		t.Fatalf("CaptureMany: %v", err)
+	}
+	for _, id := range ids {
+		body, ok := screens[id]
+		if !ok {
+			t.Fatalf("pane %q missing from batch; got keys %v", id, keysOf(screens))
+		}
+		if !strings.Contains(body, "keep current model") {
+			t.Fatalf("pane %q body does not look like the menu: %q", id, body)
+		}
+	}
+
+	// And it must agree with a single capture of the same pane.
+	one, err := client.Capture(context.Background(), ids[0], 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(one) != strings.TrimSpace(screens[ids[0]]) {
+		t.Fatal("batched and single capture disagree")
+	}
+}
+
+func keysOf(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
 }

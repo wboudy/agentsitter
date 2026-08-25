@@ -41,6 +41,19 @@ func (f *fakeClient) Capture(_ context.Context, _ string, _ int) (string, error)
 	return f.screens[i], nil
 }
 
+// CaptureMany mirrors the batched path used in production.
+func (f *fakeClient) CaptureMany(ctx context.Context, ids []string, lines int) (map[string]string, error) {
+	out := make(map[string]string, len(ids))
+	for _, id := range ids {
+		raw, err := f.Capture(ctx, id, lines)
+		if err != nil {
+			return nil, err
+		}
+		out[id] = raw
+	}
+	return out, nil
+}
+
 func (f *fakeClient) SendKeys(_ context.Context, _ string, keys ...string) error {
 	if f.sendErr != nil {
 		return f.sendErr
@@ -537,5 +550,66 @@ func TestResolveLeavesNamedSocketAlone(t *testing.T) {
 	}
 	if fake.calls != 0 {
 		t.Fatal("a named socket should not trigger discovery")
+	}
+}
+
+func TestRepeatedUnresolvedIsReportedOnce(t *testing.T) {
+	// A prompt whose options the rule cannot find stays on screen. Reporting it
+	// on every poll would flood the log and inflate any count taken from it.
+	menu := strings.Join([]string{
+		"You've hit your usage limit for the current model.",
+		hl("Switch models"),
+		"  Buy more credits",
+	}, "\n")
+	h := newHarness(t, []string{menu}, nil)
+
+	first := h.engine.Sweep(context.Background())
+	if len(first.Events) == 0 {
+		t.Fatal("the first sighting should be reported")
+	}
+	for i := 0; i < 5; i++ {
+		h.client.captures = 0
+		if got := h.engine.Sweep(context.Background()); len(got.Events) != 0 {
+			t.Fatalf("sweep %d re-reported an unchanged screen: %v", i+2, outcomes(got))
+		}
+	}
+}
+
+func TestChangedScreenIsReportedAgain(t *testing.T) {
+	menuA := strings.Join([]string{
+		"You've hit your usage limit for the current model.",
+		hl("Switch models"),
+		"  Buy more credits",
+	}, "\n")
+	menuB := strings.Join([]string{
+		"You've hit your usage limit for the current model.",
+		hl("Switch models"),
+		"  Upgrade your plan",
+	}, "\n")
+
+	h := newHarness(t, []string{menuA}, nil)
+	if len(h.engine.Sweep(context.Background()).Events) == 0 {
+		t.Fatal("first screen should be reported")
+	}
+	h.client.screens = []string{menuB}
+	h.client.captures = 0
+	if len(h.engine.Sweep(context.Background()).Events) == 0 {
+		t.Fatal("a different screen should be reported again")
+	}
+}
+
+func TestBatchedCaptureIsUsedForAllPanes(t *testing.T) {
+	h := newHarness(t, []string{"idle output"}, nil)
+	h.client.panes = []tmuxio.Pane{
+		{ID: "%1", Session: "agents", Window: "1", Index: "1", Command: "codex"},
+		{ID: "%2", Session: "agents", Window: "1", Index: "2", Command: "codex"},
+		{ID: "%3", Session: "agents", Window: "1", Index: "3", Command: "codex"},
+	}
+	res := h.engine.Sweep(context.Background())
+	if res.Watched != 3 {
+		t.Fatalf("watched %d panes, want 3", res.Watched)
+	}
+	if res.Evaluated != 3 {
+		t.Fatalf("evaluated %d panes, want 3", res.Evaluated)
 	}
 }
