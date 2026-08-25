@@ -1,0 +1,100 @@
+# agentsitter configuration.
+#
+# Every value below is set to its default. Delete anything you do not want to
+# override. Start with:
+#
+#   agentsitter doctor
+#   agentsitter once -dry-run
+#
+# and only then let it run for real.
+
+# How often to sweep every target.
+poll_interval = "3s"
+
+# Rows pulled from the bottom of each pane, and how many of those rows rules
+# are matched against. Keeping match_lines smaller anchors matching near the
+# prompt so old scrollback cannot trigger a rule.
+capture_lines = 80
+match_lines   = 32
+
+# A pane must look unchanged for this many consecutive polls before agentsitter
+# will act on it. This keeps it off a screen that is still being drawn.
+stable_polls = 2
+
+# How long to wait after a keypress before reading the pane back.
+settle = "800ms"
+
+# Decide everything, send nothing. Useful for a first run.
+dry_run = false
+
+# Record prompts that no rule claimed, so you can turn them into rules.
+learn = true
+
+# Leave the pane you are looking at alone.
+skip_active_pane = false
+
+# While this file exists agentsitter keeps watching and logging but sends no
+# keys. Managed by "agentsitter pause" and "agentsitter resume".
+pause_file = "~/.local/state/agentsitter/paused"
+
+state_file = "~/.local/state/agentsitter/state.json"
+audit_file = "~/.local/state/agentsitter/audit.jsonl"
+learn_dir  = "~/.local/state/agentsitter/learn"
+
+# Extra rule files layered over the built-in ruleset. Redeclaring a built-in
+# rule by name replaces it; redeclare with enabled = false to switch it off.
+# See the built-in ruleset with: agentsitter rules -dump
+rule_files = []
+
+# Runs on notable events (a veto, a failed verification, an unrecognized
+# prompt, a transport error) with the event as JSON on stdin. A few
+# AGENTSITTER_* environment variables are set as well.
+#   macOS:  notify_command = "osascript -e 'display notification \"'\"$AGENTSITTER_SUMMARY\"'\" with title \"agentsitter\"'"
+#   Linux:  notify_command = "notify-send agentsitter \"$AGENTSITTER_SUMMARY\""
+notify_command = ""
+
+[limits]
+# Bounds that turn a rule which matches but never resolves into a logged
+# complaint rather than an endless keypress loop.
+pane_cooldown       = "6s"
+per_rule_per_hour   = 6
+global_per_hour     = 60
+max_verify_failures = 3
+quarantine          = "10m"
+
+[safety]
+# Checked after a rule matches and before any key is sent. A pane whose text
+# trips one of these is left for a human no matter what the ruleset says.
+# Set enabled = false to turn the whole check off.
+enabled = true
+# Uncomment to replace the built-in list rather than use it.
+# never_match = [
+#   '(?i)\brm\s+-[a-z]*[rf]',
+#   '(?i)\bgit\s+push\b.*--force',
+#   '(?i)\bDROP\s+(TABLE|DATABASE|SCHEMA)\b',
+# ]
+
+# One target per tmux server. Declaring any target replaces the built-in
+# local default, so list the local machine explicitly if you still want it.
+[[targets]]
+name   = "local"
+socket = "default"
+# Which panes count as agent panes, by foreground process name. These are
+# regexes. The bare version-number pattern is not a typo: some agent CLIs run
+# from a version-named path, so tmux reports the process as e.g. "2.1.243".
+commands = ['^codex$', '^claude$', '^node$', '^\d+\.\d+\.\d+']
+# sessions      = ['^agents$']
+# exclude_panes = ['^scratch:']
+
+# A remote machine. agentsitter shells out to ssh and turns on connection
+# multiplexing, so the short poll interval does not mean a new connection
+# every few seconds. Any host alias from your ssh_config works.
+#
+# Running agentsitter on the remote machine itself is usually better: it keeps
+# working when your laptop sleeps or changes network.
+#
+# [[targets]]
+# name   = "build-box"
+# ssh    = "user@build-box.example"
+# socket = "default"
+# ssh_args = ["-i", "~/.ssh/id_ed25519"]
