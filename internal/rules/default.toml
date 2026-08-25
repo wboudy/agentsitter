@@ -1,0 +1,155 @@
+# agentsitter built-in ruleset.
+#
+# Recognition patterns below were taken from strings found in shipped agent CLI
+# binaries, not invented. Option-label patterns are broader, because the label
+# text of a menu entry is harder to pin down than the prompt text that
+# introduces it. That asymmetry is safe by construction: a rule that recognises
+# a prompt but matches none of its options does nothing and records the screen
+# for you under learn_dir, so you can add the exact label yourself.
+#
+# Override any rule by redeclaring its name in a file listed under rule_files.
+# Redeclare with enabled = false to switch one off. Print this file with:
+#
+#     agentsitter rules --dump
+#
+# Pattern syntax is Go RE2. There is no backreference or lookaround support, so
+# patterns avoid apostrophes by writing don.?t rather than don't; that also
+# matches both spellings.
+
+# --------------------------------------------------------------------------
+# Never surrender.
+# --------------------------------------------------------------------------
+
+# Whenever a prompt offers to keep waiting, take it. This sits at the top of
+# the priority order so it wins over any rule that would answer differently.
+#
+# no_verify is set because choosing "keep waiting" legitimately leaves the
+# dialog on screen; that is the whole point of the option.
+[[rules]]
+name = "prefer-keep-waiting"
+description = "Choose a keep-waiting option over any alternative."
+priority = 120
+no_verify = true
+any = ['(?i)\bkeep waiting\b']
+options = ['(?i)^\s*(?:[❯▶▸●◆➤]\s*)?(?:\d+[.)]\s*)?keep waiting']
+
+# Decline every offer to move to a weaker or cheaper model. Ride the good model
+# down to zero instead.
+[[rules]]
+name = "decline-model-downgrade"
+description = "Refuse model downgrade and spend-limit fallback offers."
+priority = 100
+any = [
+  "You've hit your usage limit",
+  "you have reached your weekly usage limit",
+  "You're out of usage credits",
+  "You've hit your monthly spend limit",
+  '(?i)switch to (?:another|a different|a smaller) model',
+  '(?i)\bdowngrade\b.*\bmodel\b',
+  '(?i)\bmodel\b.*\bdowngrade\b',
+  '(?i)approaching (?:your |the )?(?:weekly |monthly |usage )?limit',
+]
+options = [
+  '(?i)^\s*(?:[❯▶▸●◆➤]\s*)?(?:\d+[.)]\s*)?(?:no|not now|cancel)\b',
+  '(?i)^\s*(?:[❯▶▸●◆➤]\s*)?(?:\d+[.)]\s*)?keep (?:current|using|my|the|waiting)',
+  '(?i)^\s*(?:[❯▶▸●◆➤]\s*)?(?:\d+[.)]\s*)?stay on\b',
+  '(?i)^\s*(?:[❯▶▸●◆➤]\s*)?(?:\d+[.)]\s*)?don.?t (?:switch|downgrade|change)',
+  '(?i)^\s*(?:[❯▶▸●◆➤]\s*)?(?:\d+[.)]\s*)?continue (?:with|on) (?:the )?current',
+]
+verify_gone = '(?i)switch to (?:another|a different|a smaller) model|hit your usage limit'
+
+# --------------------------------------------------------------------------
+# Keep going.
+# --------------------------------------------------------------------------
+
+# Generic confirmation dialogs. The bare affirmative is preferred over one that
+# also widens permissions permanently, so an unattended answer stays as narrow
+# as the prompt allows.
+[[rules]]
+name = "confirm-proceed"
+description = "Answer generic proceed/continue confirmations affirmatively."
+priority = 80
+any = [
+  'Do you want to proceed\?',
+  'Do you want to continue\?',
+]
+options = [
+  '(?i)^\s*(?:[❯▶▸●◆➤]\s*)?(?:\d+[.)]\s*)?yes\s*$',
+  '(?i)^\s*(?:[❯▶▸●◆➤]\s*)?(?:\d+[.)]\s*)?yes,?\s*(?:and\s*)?(?:allow|proceed|continue)',
+  '(?i)^\s*(?:[❯▶▸●◆➤]\s*)?(?:\d+[.)]\s*)?(?:proceed|continue)\s*$',
+  '(?i)^\s*(?:[❯▶▸●◆➤]\s*)?(?:\d+[.)]\s*)?yes\b',
+]
+
+# Command-execution approval. The safety veto in agentsitter.toml still applies
+# and is checked after this rule matches but before any key is sent, so a
+# destructive command is left for a human even though this rule recognises it.
+[[rules]]
+name = "approve-command-execution"
+description = "Approve a command-execution request for this session only."
+priority = 90
+any = [
+  '(?i)allow .{0,24} to run\b',
+  '(?i)^\s*(?:[❯▶▸●◆➤]\s*)?(?:\d+[.)]\s*)?yes, and don.?t ask again for commands',
+]
+options = [
+  '(?i)^\s*(?:[❯▶▸●◆➤]\s*)?(?:\d+[.)]\s*)?yes\s*$',
+  '(?i)^\s*(?:[❯▶▸●◆➤]\s*)?(?:\d+[.)]\s*)?yes,?\s*(?:and\s*)?(?:allow|proceed|continue|approve)',
+  '(?i)^\s*(?:[❯▶▸●◆➤]\s*)?(?:\d+[.)]\s*)?approve\s*$',
+]
+
+# Network-access approval.
+[[rules]]
+name = "approve-network-access"
+description = "Approve an outbound network-access request."
+priority = 90
+any = ['(?i)approve network access to']
+options = [
+  '(?i)^\s*(?:[❯▶▸●◆➤]\s*)?(?:\d+[.)]\s*)?yes\s*$',
+  '(?i)^\s*(?:[❯▶▸●◆➤]\s*)?(?:\d+[.)]\s*)?yes,?\s*(?:and\s*)?(?:allow|approve)',
+  '(?i)^\s*(?:[❯▶▸●◆➤]\s*)?(?:\d+[.)]\s*)?allow\s*$',
+]
+
+# Workspace-trust gates, which block an agent before it does anything at all.
+[[rules]]
+name = "trust-workspace"
+description = "Accept workspace and folder trust prompts."
+priority = 85
+any = [
+  '(?i)do you trust (?:the|this)',
+  '(?i)trust (?:the )?(?:files|folder|workspace|directory)',
+]
+options = [
+  '(?i)^\s*(?:[❯▶▸●◆➤]\s*)?(?:\d+[.)]\s*)?yes,?\s*(?:i )?(?:trust|proceed)',
+  '(?i)^\s*(?:[❯▶▸●◆➤]\s*)?(?:\d+[.)]\s*)?yes\s*$',
+  '(?i)^\s*(?:[❯▶▸●◆➤]\s*)?(?:\d+[.)]\s*)?trust\b',
+]
+
+# --------------------------------------------------------------------------
+# Disabled by default. Enable deliberately.
+# --------------------------------------------------------------------------
+
+# Sending Escape to an agent pane is not a neutral act: in several agent CLIs
+# Escape interrupts the turn in progress. Ambient help text such as
+# "esc to dismiss" can be on screen while the agent is working perfectly well,
+# and dismissing it would stop the very work you are trying to protect. Enable
+# this only for panes where you know Escape is inert.
+[[rules]]
+name = "dismiss-escapable-notice"
+description = "Press Escape to clear a dismissible notice."
+enabled = false
+priority = 40
+any = ['(?i)\besc(?:ape)? to (?:dismiss|close|hide)\b']
+none = ['(?i)switch to (?:another|a different|a smaller) model']
+keys = ["Escape"]
+no_verify = true
+
+# Likewise, a stray Enter lands in the composer of an idle agent and submits
+# whatever happens to be typed there.
+[[rules]]
+name = "acknowledge-enter-notice"
+description = "Press Enter to acknowledge a blocking notice."
+enabled = false
+priority = 40
+any = ['(?i)press enter to continue']
+keys = ["Enter"]
+no_verify = true
