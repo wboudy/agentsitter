@@ -17,6 +17,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -27,8 +28,15 @@ import (
 	"github.com/wboudy/agentsitter/internal/tmuxio"
 )
 
-// tmuxSocket returns a socket name private to this test process.
-func tmuxSocket() string { return fmt.Sprintf("agentsitter-itest-%d", os.Getpid()) }
+// socketSeq keeps each test on its own tmux socket. Sharing one meant a
+// kill-server from a finished test could race the next test's new-session,
+// which surfaces as "server exited unexpectedly".
+var socketSeq atomic.Int64
+
+// tmuxSocket returns a socket name private to this test.
+func tmuxSocket() string {
+	return fmt.Sprintf("as-it-%d-%d", os.Getpid(), socketSeq.Add(1))
+}
 
 // startFakeAgent brings up a tmux session running the fake agent and returns
 // the socket name.
@@ -47,11 +55,22 @@ func startFakeAgent(t *testing.T, initialSelection string) string {
 	}
 
 	socket := tmuxSocket()
-	cmd := exec.Command("tmux", "-L", socket, "new-session", "-d",
-		"-s", "itest", "-x", "80", "-y", "24",
-		"bash", script, initialSelection)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("starting tmux: %v: %s", err, out)
+	// A fresh server can take a moment to accept commands on a loaded CI box.
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		cmd := exec.Command("tmux", "-L", socket, "new-session", "-d",
+			"-s", "itest", "-x", "80", "-y", "24",
+			"bash", script, initialSelection)
+		out, err := cmd.CombinedOutput()
+		if err == nil {
+			lastErr = nil
+			break
+		}
+		lastErr = fmt.Errorf("%v: %s", err, out)
+		time.Sleep(300 * time.Millisecond)
+	}
+	if lastErr != nil {
+		t.Fatalf("starting tmux: %v", lastErr)
 	}
 	t.Cleanup(func() {
 		_ = exec.Command("tmux", "-L", socket, "kill-server").Run()
