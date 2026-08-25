@@ -94,7 +94,7 @@ socket = "default"
 # Which panes count as agent panes, by foreground process name. These are
 # regexes. The bare version-number pattern is not a typo: some agent CLIs run
 # from a version-named path, so tmux reports the process as e.g. "2.1.243".
-commands = ['^codex$', '^claude$', '^node$', '^\d+\.\d+\.\d+']
+commands = ['^codex', '^claude', '^gemini', '^node$', '^\d+\.\d+\.\d+']
 # sessions      = ['^agents$']
 # exclude_panes = ['^scratch:']
 

@@ -220,11 +220,18 @@ func DefaultTarget() Target {
 const DiscoverSockets = "*"
 
 // DefaultCommands lists the foreground process names that identify an agent
-// pane. The bare version-number pattern is not a typo: some agent CLIs install
+// pane.
+//
+// The agent names are prefix matches on purpose. Orchestrators routinely launch
+// agents through a wrapper, so the process in tmux is something like
+// "codex-dispatch" rather than "codex"; an anchored match would watch nothing
+// while appearing to work.
+//
+// The bare version-number pattern is not a typo either: some agent CLIs install
 // their binary under a version-named path, so the process shows up in tmux as
 // something like "2.1.243".
 func DefaultCommands() []string {
-	return []string{`^codex$`, `^claude$`, `^node$`, `^\d+\.\d+\.\d+`}
+	return []string{`^codex`, `^claude`, `^gemini`, `^node$`, `^\d+\.\d+\.\d+`}
 }
 
 // DefaultNeverMatch is a conservative veto list. agentsitter will not answer a

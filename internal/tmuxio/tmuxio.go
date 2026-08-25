@@ -126,6 +126,12 @@ func (c *Client) command(ctx context.Context, sub ...string) *exec.Cmd {
 	argv = append(argv,
 		"-o", "BatchMode=yes",
 		"-o", "ConnectTimeout=10",
+		// A host alias may carry RemoteCommand in ssh_config, typically to
+		// auto-attach to a session. ssh refuses to run a command alongside one
+		// ("Cannot execute command-line and remote command"), so it is cleared
+		// here rather than requiring the user to keep a second bare alias.
+		"-o", "RemoteCommand=none",
+		"-o", "RequestTTY=no",
 		"-o", "ControlMaster=auto",
 		"-o", "ControlPath="+c.controlPath(),
 		"-o", "ControlPersist="+c.controlPersist(),
@@ -338,6 +344,8 @@ func (c *Client) ListSockets(ctx context.Context) ([]string, error) {
 	argv = append(argv,
 		"-o", "BatchMode=yes",
 		"-o", "ConnectTimeout=10",
+		"-o", "RemoteCommand=none",
+		"-o", "RequestTTY=no",
 		"-o", "ControlMaster=auto",
 		"-o", "ControlPath="+c.controlPath(),
 		"-o", "ControlPersist="+c.controlPersist(),

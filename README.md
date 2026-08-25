@@ -118,16 +118,19 @@ default, so list the local machine explicitly if you still want it.
 [[targets]]
 name   = "local"
 socket = "*"        # "*" means every socket with a live server
-commands = ['^codex$', '^claude$', '^node$', '^\d+\.\d+\.\d+']
+commands = ['^codex', '^claude', '^gemini', '^node$', '^\d+\.\d+\.\d+']
 ```
 
 `socket = "*"` is the default and it matters more than it looks. Agents do not
 always live on tmux's `default` socket, and a watcher that assumes they do
 watches nothing while appearing to work.
 
-That last command pattern is not a typo. Some agent CLIs run their binary from
-a version-named path, so tmux reports the foreground process as something like
-`2.1.243` rather than a program name.
+Two things about that filter are deliberate. The agent names are prefix
+matches because orchestrators routinely launch agents through a wrapper, so the
+process in tmux is something like `codex-dispatch` rather than `codex`; an
+anchored match would watch nothing while appearing to work. And the bare
+version-number pattern is not a typo: some agent CLIs run their binary from a
+version-named path, so tmux reports the process as something like `2.1.243`.
 
 ## Rules
 

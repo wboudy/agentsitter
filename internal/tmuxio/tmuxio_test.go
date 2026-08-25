@@ -159,3 +159,17 @@ func TestTailLines(t *testing.T) {
 		t.Fatalf("a non-positive count should return everything, got %q", got)
 	}
 }
+
+func TestRemoteCommandIsCleared(t *testing.T) {
+	// A host alias may carry RemoteCommand in ssh_config to auto-attach to a
+	// session. ssh then refuses to run a command alongside it, failing with
+	// "Cannot execute command-line and remote command". Clearing it means a
+	// user does not have to keep a second bare alias just for this tool.
+	c := &Client{SSH: "attach-alias"}
+	joined := strings.Join(c.command(context.Background(), "list-panes").Args, " ")
+	for _, want := range []string{"RemoteCommand=none", "RequestTTY=no"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("remote command missing %q: %s", want, joined)
+		}
+	}
+}

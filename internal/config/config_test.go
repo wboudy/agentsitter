@@ -153,8 +153,18 @@ func TestDefaultCommandsCoverVersionNamedBinaries(t *testing.T) {
 	if !cfg.Targets[0].MatchesCommand("2.1.243") {
 		t.Fatal("default command filters should match a version-named agent binary")
 	}
-	if cfg.Targets[0].MatchesCommand("btop") {
-		t.Fatal("default command filters should not match unrelated programs")
+	// Orchestrators launch agents through wrappers, so the process name is
+	// often the agent name with a suffix. An anchored match would watch
+	// nothing here while still looking healthy.
+	for _, wrapper := range []string{"codex-dispatch", "codex", "claude-wrapper", "claude"} {
+		if !cfg.Targets[0].MatchesCommand(wrapper) {
+			t.Errorf("default command filters should match %q", wrapper)
+		}
+	}
+	for _, unrelated := range []string{"btop", "sshd:", "tailscaled", "bash", "zsh"} {
+		if cfg.Targets[0].MatchesCommand(unrelated) {
+			t.Errorf("default command filters should not match %q", unrelated)
+		}
 	}
 }
 
