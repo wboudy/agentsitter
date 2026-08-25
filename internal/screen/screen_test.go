@@ -386,3 +386,20 @@ func TestShortVariedOptionsAreStillAMenu(t *testing.T) {
 		t.Fatal("short varied options are a menu")
 	}
 }
+
+func TestOptionNumberReadsPreselectedRow(t *testing.T) {
+	// Codex marks the selected row with the same angle character it uses for
+	// the composer. That glyph must not count as a selection marker, but the
+	// list number behind it still has to parse, or a menu whose first option
+	// is preselected cannot be answered at all.
+	s := Parse("› 1. Yes, proceed (y)\n  2. No, and tell it what to do differently")
+	if got := s.OptionNumber(0); got != 1 {
+		t.Fatalf("OptionNumber(0) = %d, want 1", got)
+	}
+	if got := s.OptionNumber(1); got != 2 {
+		t.Fatalf("OptionNumber(1) = %d, want 2", got)
+	}
+	if s.Lines[0].Marker {
+		t.Fatal("the angle glyph must still not count as a menu marker")
+	}
+}

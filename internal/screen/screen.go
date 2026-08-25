@@ -63,9 +63,17 @@ type Screen struct {
 // selection would make every idle pane look like an open menu.
 const markerGlyphs = "❯▶▸●◆➤"
 
+// pointerGlyphs are characters that may sit in front of a list number. It is
+// deliberately wider than markerGlyphs and includes the angle characters that
+// also introduce a composer, because reading a number off a line makes no
+// claim about which line is selected. Leaving them out meant a menu whose
+// first option was preselected, which is the usual case, did not parse as
+// numbered at all.
+const pointerGlyphs = markerGlyphs + "›>»"
+
 var (
 	markerRe  = regexp.MustCompile(`^\s*[` + markerGlyphs + `]\s+\S`)
-	numberRe  = regexp.MustCompile(`^\s*(?:[` + markerGlyphs + `]\s*)?(\d+)[.)]\s+\S`)
+	numberRe  = regexp.MustCompile(`^\s*(?:[` + pointerGlyphs + `]\s*)?(\d+)[.)]\s+\S`)
 	digitsRe  = regexp.MustCompile(`\d+`)
 	spacesRe  = regexp.MustCompile(`[ \t]+`)
 	spinnerRe = regexp.MustCompile(`[\x{2800}-\x{28ff}\x{25d0}-\x{25d3}\x{25e2}-\x{25e5}]`)

@@ -178,6 +178,35 @@ any = ["placeholder"]
 options = ["placeholder"]
 ```
 
+### What it recognizes today
+
+| Dialog | Answer | Source of the strings |
+|---|---|---|
+| Codex: `Would you like to run the following command?` | Yes, proceed | snapshot tests in openai/codex |
+| Codex: `Would you like to make the following edits?` | Yes, proceed | snapshot tests in openai/codex |
+| Codex: `Would you like to grant these permissions?` | grant for this turn | snapshot tests in openai/codex |
+| Codex: `Do you want to approve network access to ...?` | just this once | snapshot tests in openai/codex |
+| Codex: `New version available! Would you like to update?` | **No, not now** | snapshot tests in openai/codex |
+| Codex capacity: `Retry with a faster model` | **Dismiss and keep waiting** | captured from a live agent |
+| Claude Code: `Do you want to proceed?` / `continue?` | Yes | strings in the shipped binary |
+| Model downgrade and spend-limit offers | decline | strings in both binaries |
+| Workspace and folder trust prompts | accept | strings in the shipped binary |
+
+Each of those is a fixture in `internal/engine/coverage_test.go`, asserting not
+merely that the prompt is recognized but that the intended option is the one
+chosen. Two policies are pinned there as tests: the update offer is always
+declined, because updating mid-session tears down the running agent, and where
+a dialog offers both a narrow and a broad affirmative, the narrow one wins.
+"Yes, proceed" is taken over "Yes, and don't ask again", and a permission is
+granted for a turn rather than a session.
+
+**This list is not exhaustive and cannot be.** Claude Code ships as a closed
+binary, both CLIs change weekly, and new features bring new dialogs. Anything
+not listed above is handled by the design rather than by a rule: an
+unrecognized prompt is left strictly alone and written to `learn_dir` for you
+to turn into a rule. Silence from agentsitter never means a prompt was
+answered wrongly, only that it was not answered.
+
 ### Teaching it a new prompt
 
 agentsitter records screens that look like a prompt but that no rule claims:

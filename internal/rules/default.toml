@@ -85,6 +85,7 @@ priority = 80
 any = [
   'Do you want to proceed\?',
   'Do you want to continue\?',
+  '(?i)allow external CLAUDE\.md file imports\?',
 ]
 options = [
   '(?i)^\s*(?:[❯▶▸●◆➤]\s*)?(?:\d+[.)]\s*)?yes\s*$',
@@ -115,10 +116,13 @@ options = [
 name = "approve-network-access"
 description = "Approve an outbound network-access request."
 priority = 90
-any = ['(?i)approve network access to']
+any = ['(?i)approve network access to', '(?i)allow network connection to']
+# Narrowest first: this one request, then this conversation.
 options = [
+  '(?i)^\s*(?:[❯▶▸●◆➤›]\s*)?\d+[.)]\s+yes,\s*just this once\b',
+  '(?i)^\s*(?:[❯▶▸●◆➤›]\s*)?\d+[.)]\s+yes,\s*and allow this host for this conversation\b',
   '(?i)^\s*(?:[❯▶▸●◆➤]\s*)?(?:\d+[.)]\s*)?yes\s*$',
-  '(?i)^\s*(?:[❯▶▸●◆➤]\s*)?(?:\d+[.)]\s*)?yes,?\s*(?:and\s*)?(?:allow|approve)',
+  '(?i)^\s*(?:[❯▶▸●◆➤›]\s*)?\d+[.)]\s+yes,?\s*(?:and\s*)?(?:allow|approve)',
   '(?i)^\s*(?:[❯▶▸●◆➤]\s*)?(?:\d+[.)]\s*)?allow\s*$',
 ]
 
@@ -136,6 +140,68 @@ options = [
   '(?i)^\s*(?:[❯▶▸●◆➤]\s*)?(?:\d+[.)]\s*)?yes\s*$',
   '(?i)^\s*(?:[❯▶▸●◆➤]\s*)?(?:\d+[.)]\s*)?trust\b',
 ]
+
+# --------------------------------------------------------------------------
+# Codex dialogs. Every title and option label below was taken verbatim from the
+# rendered-terminal snapshot tests in the openai/codex repository, so these are
+# the exact strings the TUI draws rather than a guess at them.
+#
+# Codex marks the selected row with a single angle glyph and numbers every
+# option. agentsitter does not treat that glyph as a selection marker, because
+# the same character introduces the composer, so these are answered by pressing
+# the option number instead.
+# --------------------------------------------------------------------------
+
+[[rules]]
+name = "codex-approve-command"
+description = "Approve a Codex command-execution request, for this turn only."
+priority = 90
+any = ['Would you like to run the following command\?']
+# "Yes, proceed" is preferred over the option that also stops future prompting
+# for a whole command prefix. An unattended answer should not quietly widen
+# what may run without asking next time.
+options = [
+  '(?i)^\s*(?:[❯▶▸●◆➤›]\s*)?\d+[.)]\s+yes,\s*proceed\b',
+  '(?i)^\s*(?:[❯▶▸●◆➤›]\s*)?\d+[.)]\s+yes\b',
+]
+
+[[rules]]
+name = "codex-approve-edits"
+description = "Approve a Codex file-edit request, for this turn only."
+priority = 90
+any = ['Would you like to make the following edits\?']
+options = [
+  '(?i)^\s*(?:[❯▶▸●◆➤›]\s*)?\d+[.)]\s+yes,\s*proceed\b',
+  '(?i)^\s*(?:[❯▶▸●◆➤›]\s*)?\d+[.)]\s+yes\b',
+]
+
+[[rules]]
+name = "codex-grant-permissions"
+description = "Grant a Codex permission request at the narrowest scope offered."
+priority = 90
+any = ['Would you like to grant these permissions\?']
+# Ordered narrowest first: this turn, then this session. Granting for a turn
+# lets the work continue without handing over the rest of the session.
+options = [
+  '(?i)^\s*(?:[❯▶▸●◆➤›]\s*)?\d+[.)]\s+yes,\s*grant these permissions for this turn\b',
+  '(?i)^\s*(?:[❯▶▸●◆➤›]\s*)?\d+[.)]\s+yes,\s*grant .*for this turn\b',
+  '(?i)^\s*(?:[❯▶▸●◆➤›]\s*)?\d+[.)]\s+yes,\s*grant .*for this session\b',
+  '(?i)^\s*(?:[❯▶▸●◆➤›]\s*)?\d+[.)]\s+yes\b',
+]
+
+[[rules]]
+name = "codex-decline-update"
+description = "Decline an in-session update offer, which would restart the agent."
+priority = 95
+any = ['(?i)new version available.*would you like to update\?', '(?i)would you like to update\?']
+# Updating mid-session tears down the running agent, so this is one of the few
+# places the answer is no. "Not now" is chosen over "Don't remind me" because
+# declining once is reversible and silencing the prompt forever is not.
+options = [
+  '(?i)^\s*(?:[❯▶▸●◆➤›]\s*)?\d+[.)]\s+no,\s*not now\b',
+  '(?i)^\s*(?:[❯▶▸●◆➤›]\s*)?\d+[.)]\s+(?:no|not now)\b',
+]
+verify_gone = '(?i)would you like to update\?'
 
 # --------------------------------------------------------------------------
 # Disabled by default. Enable deliberately.
