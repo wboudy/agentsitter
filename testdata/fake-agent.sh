@@ -35,8 +35,10 @@ render
 while IFS= read -rsn1 key; do
   case "$key" in
     $'\033')
-      # An escape sequence: read the rest of the arrow key.
-      read -rsn2 -t 0.05 rest || rest=""
+      # An escape sequence: read the rest of the arrow key. The timeout is a
+      # whole number because bash 3.2, still the system bash on macOS, rejects
+      # a fractional one and would leave the bracket sequence unconsumed.
+      read -rsn2 -t 1 rest || rest=""
       case "$rest" in
         '[A') [ "$selected" -gt 0 ] && selected=$((selected - 1)) ;;
         '[B') [ "$selected" -lt $((${#options[@]} - 1)) ] && selected=$((selected + 1)) ;;
