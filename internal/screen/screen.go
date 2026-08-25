@@ -88,6 +88,10 @@ const maxOptionWidth = 90
 // marked block. Menus are short.
 const maxOptionBlock = 8
 
+// wrapWidth is the length at which a line starts to look like reflowed prose
+// rather than a menu label.
+const wrapWidth = 55
+
 // Parse splits a raw capture into lines and records SGR highlighting per line.
 func Parse(raw string) Screen {
 	raw = strings.ReplaceAll(raw, "\r\n", "\n")
@@ -424,8 +428,11 @@ func (s Screen) LooksLikeSelector() bool {
 	if sel < 0 || !isOptionShaped(s.Lines[sel]) || s.inComposerBlock(sel) {
 		return false
 	}
-	n := s.blockSize(sel)
-	return n >= 2 && n <= maxOptionBlock
+	if n := s.blockSize(sel); n < 2 || n > maxOptionBlock {
+		return false
+	}
+	start, end := s.blockBounds(sel)
+	return !s.looksWrapped(start, end)
 }
 
 // isOptionShaped reports whether a line could be a menu entry: present, short,
@@ -434,6 +441,29 @@ func isOptionShaped(l Line) bool {
 	t := strings.TrimSpace(l.Text)
 	return t != "" && len(t) < maxOptionWidth &&
 		!isRuleLine(l.Text) && !composerRe.MatchString(l.Text)
+}
+
+// looksWrapped reports whether a block reads as a wrapped paragraph rather
+// than a list of choices.
+//
+// Reflowed prose fills to the wrap width on every line but the last, while
+// menu labels are short and vary in length. This is what separates a genuine
+// menu from the message text an agent echoes back with the same pointer glyph
+// it uses for selection.
+func (s Screen) looksWrapped(start, end int) bool {
+	n := end - start + 1
+	if n < 3 {
+		// Two lines are too few to show a wrap pattern, and a menu may well
+		// have one long option.
+		return false
+	}
+	long := 0
+	for i := start; i <= end; i++ {
+		if len([]rune(strings.TrimSpace(s.Lines[i].Text))) >= wrapWidth {
+			long++
+		}
+	}
+	return long >= n-1
 }
 
 // blockSize counts the contiguous run of option-shaped lines containing idx.

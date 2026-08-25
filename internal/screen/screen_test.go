@@ -357,3 +357,32 @@ func TestEchoedUserMessageIsNotAMenu(t *testing.T) {
 		t.Fatal("a short marked block is still a menu")
 	}
 }
+
+func TestWrappedProseBlockIsNotAMenu(t *testing.T) {
+	// Agent CLIs echo queued and past user messages with the same pointer glyph
+	// used for menu selection. Reflowed prose fills to the wrap width on every
+	// line but the last; menu labels are short and vary in length.
+	raw := strings.Join([]string{
+		"  Ran 4 shell commands",
+		"",
+		hl("  ❯ so explain in one tight paragraph the build stages end to end"),
+		"    so i can give some feedback and we can pivot the worker a bit and",
+		"    do the same with the other build as well since it is not so clear",
+		"    how to choose the environment spec decisions over there",
+	}, "\n")
+	if Parse(raw).LooksLikeSelector() {
+		t.Fatal("a wrapped message block must not register as an open menu")
+	}
+}
+
+func TestShortVariedOptionsAreStillAMenu(t *testing.T) {
+	raw := strings.Join([]string{
+		"Do you want to proceed?",
+		hl("❯ Yes"),
+		"  Yes, and don't ask again",
+		"  No",
+	}, "\n")
+	if !Parse(raw).LooksLikeSelector() {
+		t.Fatal("short varied options are a menu")
+	}
+}

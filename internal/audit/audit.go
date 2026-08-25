@@ -65,9 +65,14 @@ type Event struct {
 }
 
 // Notable reports whether an event is worth waking a human for.
+//
+// An unrecognised prompt is deliberately not on this list. It is a passive
+// recording made for later rule authoring, and agent panes contain enough
+// menu-shaped chrome that notifying on every one would train you to ignore
+// the notifications that matter.
 func (e Event) Notable() bool {
 	switch e.Outcome {
-	case OutcomeVetoed, OutcomeVerifyFailed, OutcomeUnknownPrompt, OutcomeError:
+	case OutcomeVetoed, OutcomeVerifyFailed, OutcomeError:
 		return true
 	}
 	return false
