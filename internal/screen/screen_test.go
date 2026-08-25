@@ -143,7 +143,7 @@ func TestFingerprintIgnoresColourChanges(t *testing.T) {
 func TestLooksLikeSelector(t *testing.T) {
 	menu := strings.Join([]string{
 		"You've hit your usage limit for gpt-x.",
-		esc + "[7m❯ Keep current model" + esc + "[0m",
+		hl("❯ Keep current model"),
 		"  Switch to another model",
 	}, "\n")
 	if !Parse(menu).LooksLikeSelector() {
@@ -163,5 +163,197 @@ func TestLooksLikeSelector(t *testing.T) {
 
 	if !Parse("Overwrite the file? (y/n)").LooksLikeSelector() {
 		t.Fatal("a y/n prompt should look like a selector")
+	}
+}
+
+// idleAgentPane reproduces the shape of a real idle agent screen: ordinary
+// output that happens to contain a numbered list, and a composer input line
+// that the TUI draws with a background attribute so it reads as highlighted.
+func idleAgentPane() string {
+	return strings.Join([]string{
+		"  The change touches three files.",
+		"",
+		"  1. Update the parser entry point.",
+		"  2. Thread the new option through.",
+		"  3. Add a regression test.",
+		"",
+		"─ Worked for 15m 09s ────────────────────",
+		"",
+		hl("› Ask the agent to do anything"),
+		"",
+		"  Context 24% used",
+	}, "\n")
+}
+
+func hl(s string) string { return esc + "[7m" + s + esc + "[0m" }
+
+func TestIdleAgentPaneIsNotASelector(t *testing.T) {
+	// A lone highlighted line surrounded by blanks is not a menu, however
+	// many numbered lines appear elsewhere in the output.
+	if Parse(idleAgentPane()).LooksLikeSelector() {
+		t.Fatal("an idle agent pane must not register as an open menu")
+	}
+}
+
+func TestComposerDoesNotWinSelectionOverRealMenu(t *testing.T) {
+	// If the composer were allowed to count as the selection, the distance to
+	// the intended option would be measured from the wrong row and agentsitter
+	// would walk the cursor to the wrong entry.
+	raw := strings.Join([]string{
+		"You've hit your usage limit.",
+		"  Yes, switch models",
+		hl("  No, keep current model"),
+		"",
+		hl("› Ask the agent to do anything"),
+	}, "\n")
+
+	s := Parse(raw)
+	if got := s.SelectedIndex(); got != 2 {
+		t.Fatalf("SelectedIndex = %d, want 2 (the menu entry, not the composer)", got)
+	}
+	if !s.LooksLikeSelector() {
+		t.Fatal("a real menu should still register as a selector")
+	}
+}
+
+func TestComposerStillUsableAsLastResort(t *testing.T) {
+	// TUIs that genuinely point with an angle bracket keep working, because
+	// the composer shape is deprioritised rather than ignored.
+	s := Parse(hl("> The only highlighted line"))
+	if got := s.SelectedIndex(); got != 0 {
+		t.Fatalf("SelectedIndex = %d, want 0", got)
+	}
+}
+
+func TestBlankLineBreaksAnOptionBlock(t *testing.T) {
+	isolated := strings.Join([]string{"context above", "", hl("Alone"), "", "context below"}, "\n")
+	if Parse(isolated).LooksLikeSelector() {
+		t.Fatal("a highlighted line fenced by blanks is not an option block")
+	}
+
+	adjacent := strings.Join([]string{"context above", "", hl("Chosen"), "Sibling", ""}, "\n")
+	if !Parse(adjacent).LooksLikeSelector() {
+		t.Fatal("a highlighted line with an adjacent sibling is an option block")
+	}
+}
+
+func TestLongProseLineIsNotAnOption(t *testing.T) {
+	long := strings.Repeat("prose ", 30)
+	raw := strings.Join([]string{"leading line", hl(long), "trailing line"}, "\n")
+	if Parse(raw).LooksLikeSelector() {
+		t.Fatal("a highlighted line too long to be a menu entry is not a selector")
+	}
+}
+
+func TestPartialHighlightIsNotSelection(t *testing.T) {
+	// Agent TUIs paint small floating affordances partway through a line of
+	// ordinary prose. A menu entry, by contrast, is highlighted across its row.
+	overlay := "  the allowlist there is nothing" + hl(" Jump to bottom (click) ") + "left to repair here"
+	raw := strings.Join([]string{
+		"  Decision three is repair. Today the plan says that if a check fails,",
+		"  a model puts something back and we loop around and try again.",
+		overlay,
+	}, "\n")
+
+	s := Parse(raw)
+	if s.Lines[2].SpansHighlight() {
+		t.Fatal("a highlighted fragment mid-line should not count as a spanning highlight")
+	}
+	if got := s.SelectedIndex(); got != -1 {
+		t.Fatalf("SelectedIndex = %d, want -1", got)
+	}
+	if s.LooksLikeSelector() {
+		t.Fatal("prose carrying an inline overlay is not a menu")
+	}
+}
+
+func TestHighlightToEndOfRowCounts(t *testing.T) {
+	// Only the label is highlighted, not the leading indent or pointer, which
+	// is common. It still reaches the end of the row, so it is a selection.
+	s := Parse("  ❯ " + hl("Keep current model"))
+	if !s.Lines[0].SpansHighlight() {
+		t.Fatal("a highlight running to the end of the row is a selection")
+	}
+}
+
+func TestBoxedComposerIsNotAMenu(t *testing.T) {
+	// One agent CLI draws its composer with the same pointer glyph it uses for
+	// menu selection, inside a box. Text mid-typing must not read as a menu.
+	raw := strings.Join([]string{
+		"  Some earlier output from the agent.",
+		"",
+		"────────────────────────────────────────",
+		"❯ we should rename these two pipelines",
+		"  and document what the lint step does",
+		"────────────────────────────────────────",
+		"  bypass permissions on",
+	}, "\n")
+
+	s := Parse(raw)
+	if !s.inComposerBlock(3) {
+		t.Fatal("a pointer line fenced by rules should be recognised as a composer")
+	}
+	if s.LooksLikeSelector() {
+		t.Fatal("a composer mid-typing must not register as an open menu")
+	}
+}
+
+func TestBoxedMenuStillCountsWhenSeveralOptionsAreMarked(t *testing.T) {
+	// A framed dialog is only treated as a composer when exactly one pointer
+	// sits on the first line of the block. A real list is unaffected.
+	raw := strings.Join([]string{
+		"  Do you want to proceed?",
+		"────────────────────────────────────────",
+		hl("❯ Yes"),
+		"❯ No",
+		"────────────────────────────────────────",
+	}, "\n")
+
+	s := Parse(raw)
+	if s.inComposerBlock(2) {
+		t.Fatal("a block with several pointers is a menu, not a composer")
+	}
+	if !s.LooksLikeSelector() {
+		t.Fatal("a framed menu should still register as a selector")
+	}
+}
+
+func TestIsRuleLine(t *testing.T) {
+	for _, in := range []string{
+		"────────────────────────",
+		"------------------------",
+		"========================",
+	} {
+		if !isRuleLine(in) {
+			t.Errorf("isRuleLine(%q) = false, want true", in)
+		}
+	}
+	for _, in := range []string{"", "---", "  Yes, continue", "─ Worked for 15m 09s ─"} {
+		if isRuleLine(in) {
+			t.Errorf("isRuleLine(%q) = true, want false", in)
+		}
+	}
+}
+
+func TestEchoedUserMessageIsNotAMenu(t *testing.T) {
+	// Agent CLIs echo past user messages with the same pointer glyph they use
+	// for menu selection. A wrapped paragraph is a long marked block; a menu
+	// is a short one.
+	lines := []string{"  Crunched for 1m 38s", "", hl("❯ we should rename these two pipelines and also")}
+	for i := 0; i < 12; i++ {
+		lines = append(lines, "  another wrapped continuation line of the same message")
+	}
+	if Parse(strings.Join(lines, "\n")).LooksLikeSelector() {
+		t.Fatal("a long wrapped user message must not register as an open menu")
+	}
+
+	// The same shape truncated to menu length is a menu.
+	short := strings.Join([]string{
+		"  Do you want to proceed?",
+		hl("❯ Yes"),
+		"  No",
+	}, "\n")
+	if !Parse(short).LooksLikeSelector() {
+		t.Fatal("a short marked block is still a menu")
 	}
 }

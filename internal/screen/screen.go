@@ -19,10 +19,38 @@ type Line struct {
 	Text        string // row with all escape sequences removed
 	Highlighted bool   // reverse video or a non-default background covered visible text
 	Marker      bool   // row begins with a menu pointer glyph
+
+	// HighlightCount is how many visible, non-space characters were drawn
+	// under a highlight attribute, and HighlightEnd is the position just past
+	// the last of them. Together they say whether the highlight covers the row
+	// or merely decorates part of it.
+	HighlightCount int
+	HighlightEnd   int
+}
+
+// SpansHighlight reports whether the highlight covers this row rather than
+// decorating a fragment of it.
+//
+// A selected menu entry is highlighted across its label, usually to the end of
+// the row. Agent TUIs also paint small floating affordances (a "jump to
+// bottom" chip, an inline badge) partway through a line of ordinary prose. The
+// difference between those two is extent, not colour.
+func (l Line) SpansHighlight() bool {
+	if l.HighlightCount == 0 {
+		return false
+	}
+	n := len([]rune(strings.TrimRight(l.Text, " \t")))
+	if n == 0 {
+		return false
+	}
+	if l.HighlightEnd >= n {
+		return true // runs to the end of the row
+	}
+	return float64(l.HighlightCount)/float64(n) >= 0.6
 }
 
 // Selected reports whether this line appears to be the active menu entry.
-func (l Line) Selected() bool { return l.Highlighted || l.Marker }
+func (l Line) Selected() bool { return l.SpansHighlight() || l.Marker }
 
 // Screen is an ordered set of parsed lines, top row first.
 type Screen struct {
@@ -38,13 +66,27 @@ const markerGlyphs = "❯▶▸●◆➤"
 var (
 	markerRe  = regexp.MustCompile(`^\s*[` + markerGlyphs + `]\s+\S`)
 	numberRe  = regexp.MustCompile(`^\s*(?:[` + markerGlyphs + `]\s*)?(\d+)[.)]\s+\S`)
-	optionRe  = regexp.MustCompile(`^\s*(?:[` + markerGlyphs + `]\s*)?(?:\d+[.)]\s+|\[\d+\]\s+)?\S`)
 	digitsRe  = regexp.MustCompile(`\d+`)
 	spacesRe  = regexp.MustCompile(`[ \t]+`)
 	spinnerRe = regexp.MustCompile(`[\x{2800}-\x{28ff}\x{25d0}-\x{25d3}\x{25e2}-\x{25e5}]`)
 	asciiSpin = regexp.MustCompile(`(^|\s)[|/\\-](\s|$)`)
 	yesNoRe   = regexp.MustCompile(`(?i)\((?:y/n|yes/no)\)|\[y/n\]|press enter to|esc to (?:dismiss|cancel|skip)`)
+
+	// composerRe matches an agent's text-input line. Agent CLIs commonly draw
+	// it with a background attribute, which makes it look highlighted even
+	// though nothing is selected and no menu is open.
+	composerRe = regexp.MustCompile(`^\s*[\x{203a}>\x{00bb}]\s`)
 )
+
+// maxOptionWidth is the longest a line can be and still plausibly be a menu
+// entry rather than prose.
+const maxOptionWidth = 90
+
+// maxOptionBlock is the largest run of lines that still plausibly reads as a
+// list of choices. Agent CLIs echo past user messages with the same pointer
+// glyph they use for menu selection, and a wrapped paragraph produces a long
+// marked block. Menus are short.
+const maxOptionBlock = 8
 
 // Parse splits a raw capture into lines and records SGR highlighting per line.
 func Parse(raw string) Screen {
@@ -52,12 +94,14 @@ func Parse(raw string) Screen {
 	rows := strings.Split(raw, "\n")
 	lines := make([]Line, 0, len(rows))
 	for _, row := range rows {
-		text, hl := scanRow(row)
+		text, count, end := scanRow(row)
 		lines = append(lines, Line{
-			Raw:         row,
-			Text:        strings.TrimRight(text, " \t"),
-			Highlighted: hl,
-			Marker:      markerRe.MatchString(text),
+			Raw:            row,
+			Text:           strings.TrimRight(text, " \t"),
+			Highlighted:    count > 0,
+			Marker:         markerRe.MatchString(text),
+			HighlightCount: count,
+			HighlightEnd:   end,
 		})
 	}
 	return Screen{Lines: lines}
@@ -65,7 +109,7 @@ func Parse(raw string) Screen {
 
 // StripANSI removes escape sequences and returns the visible text.
 func StripANSI(s string) string {
-	out, _ := scanRow(s)
+	out, _, _ := scanRow(s)
 	return out
 }
 
@@ -119,14 +163,16 @@ func extendedSkip(params []int, i int) int {
 	return 0
 }
 
-// scanRow strips escape sequences from one row and reports whether any visible,
-// non-space character was drawn while a highlight attribute was active.
-func scanRow(row string) (string, bool) {
+// scanRow strips escape sequences from one row and measures how much visible,
+// non-space text was drawn while a highlight attribute was active. It returns
+// the plain text, the count of highlighted characters, and the position just
+// past the last one.
+func scanRow(row string) (string, int, int) {
 	var b strings.Builder
 	b.Grow(len(row))
 
 	var st sgrState
-	lit := false
+	var count, end, col int
 	runes := []rune(row)
 	n := len(runes)
 
@@ -153,8 +199,10 @@ func scanRow(row string) (string, bool) {
 		r := runes[i]
 		if r != 0x1b {
 			b.WriteRune(r)
+			col++
 			if st.on() && r != ' ' && r != '\t' {
-				lit = true
+				count++
+				end = col
 			}
 			i++
 			continue
@@ -189,7 +237,7 @@ func scanRow(row string) (string, bool) {
 			i += 2
 		}
 	}
-	return b.String(), lit
+	return b.String(), count, end
 }
 
 // parseParams converts an SGR parameter string into integers. An omitted
@@ -249,17 +297,94 @@ func (s Screen) Find(re *regexp.Regexp) int {
 	return -1
 }
 
+// ruleLineRe matches a horizontal rule drawn with box characters or dashes.
+var ruleLineRe = regexp.MustCompile(`^[\x{2500}-\x{257f}\-_=~ ]{8,}$`)
+
+// isRuleLine reports whether a line is a horizontal divider.
+func isRuleLine(text string) bool {
+	t := strings.TrimSpace(text)
+	return len([]rune(t)) >= 8 && ruleLineRe.MatchString(t)
+}
+
+// breaksBlock reports whether a line ends a run of related rows. Blank lines
+// separate blocks, and so do horizontal rules: a rule is the frame around a
+// block rather than a member of it.
+func breaksBlock(l Line) bool {
+	return strings.TrimSpace(l.Text) == "" || isRuleLine(l.Text)
+}
+
+// blockBounds returns the run of related lines containing idx.
+func (s Screen) blockBounds(idx int) (int, int) {
+	start, end := idx, idx
+	for start > 0 && !breaksBlock(s.Lines[start-1]) {
+		start--
+	}
+	for end < len(s.Lines)-1 && !breaksBlock(s.Lines[end+1]) {
+		end++
+	}
+	return start, end
+}
+
+// inComposerBlock reports whether idx sits inside a boxed text-input area.
+//
+// This exists because at least one agent CLI draws its composer with the very
+// same pointer glyph used for menu selection, inside a box. Without this the
+// text a user is halfway through typing reads as an open menu whose first
+// entry is selected. A composer is recognised by its frame: a run of lines
+// fenced above and below by horizontal rules, with the pointer on the first
+// line of the run and nowhere else.
+func (s Screen) inComposerBlock(idx int) bool {
+	if idx < 0 || idx >= len(s.Lines) {
+		return false
+	}
+	start, end := s.blockBounds(idx)
+	if start == 0 || end == len(s.Lines)-1 {
+		return false
+	}
+	if !isRuleLine(s.Lines[start-1].Text) || !isRuleLine(s.Lines[end+1].Text) {
+		return false
+	}
+	markers := 0
+	for i := start; i <= end; i++ {
+		if s.Lines[i].Marker {
+			markers++
+		}
+	}
+	return markers == 1 && s.Lines[start].Marker
+}
+
 // SelectedIndex returns the index of the active menu entry, or -1 when nothing
-// looks selected. SGR highlighting is authoritative; pointer glyphs are a
-// fallback for TUIs that colour nothing.
+// looks selected.
+//
+// Preference order matters. An agent's composer is often drawn with a
+// background attribute or a pointer glyph, so it reads as selected even with
+// no menu open. If it were allowed to win, a menu drawn elsewhere would have
+// its cursor distance measured from the wrong row and agentsitter would walk the
+// selection to the wrong option. Composer-shaped rows are therefore considered
+// only as a last resort, which keeps TUIs that genuinely point with an angle
+// bracket working.
 func (s Screen) SelectedIndex() int {
-	for i := len(s.Lines) - 1; i >= 0; i-- {
-		if s.Lines[i].Highlighted {
+	notComposer := func(i int, l Line) bool {
+		return !composerRe.MatchString(l.Text) && !s.inComposerBlock(i)
+	}
+	passes := []func(int, Line) bool{
+		func(i int, l Line) bool { return l.SpansHighlight() && notComposer(i, l) },
+		func(i int, l Line) bool { return l.Marker && notComposer(i, l) },
+		func(_ int, l Line) bool { return l.SpansHighlight() },
+		func(_ int, l Line) bool { return l.Marker },
+	}
+	for _, pred := range passes {
+		if i := s.findLast(pred); i >= 0 {
 			return i
 		}
 	}
+	return -1
+}
+
+// findLast returns the index of the lowest line satisfying pred, or -1.
+func (s Screen) findLast(pred func(int, Line) bool) int {
 	for i := len(s.Lines) - 1; i >= 0; i-- {
-		if s.Lines[i].Marker {
+		if pred(i, s.Lines[i]) {
 			return i
 		}
 	}
@@ -287,29 +412,43 @@ func (s Screen) OptionNumber(idx int) int {
 // LooksLikeSelector reports whether the screen plausibly shows an interactive
 // prompt. It is intentionally loose: it only decides whether an unrecognised
 // screen is worth recording for later rule authoring, never whether to act.
+//
+// The test is that the selected line sits in a contiguous block of at least
+// two short lines. A blank row ends the block, which is what separates a real
+// option list from a lone highlighted line floating in ordinary output.
 func (s Screen) LooksLikeSelector() bool {
 	if yesNoRe.MatchString(s.Text()) {
 		return true
 	}
-	if s.SelectedIndex() < 0 {
+	sel := s.SelectedIndex()
+	if sel < 0 || !isOptionShaped(s.Lines[sel]) || s.inComposerBlock(sel) {
 		return false
 	}
-	run := 0
-	for _, l := range s.Lines {
-		t := strings.TrimSpace(l.Text)
-		switch {
-		case t == "":
-			// A blank row inside a menu does not break the run.
-		case len(t) < 90 && optionRe.MatchString(l.Text):
-			run++
-			if run >= 2 {
-				return true
-			}
-		default:
-			run = 0
-		}
+	n := s.blockSize(sel)
+	return n >= 2 && n <= maxOptionBlock
+}
+
+// isOptionShaped reports whether a line could be a menu entry: present, short,
+// not a frame, and not the agent's own input line.
+func isOptionShaped(l Line) bool {
+	t := strings.TrimSpace(l.Text)
+	return t != "" && len(t) < maxOptionWidth &&
+		!isRuleLine(l.Text) && !composerRe.MatchString(l.Text)
+}
+
+// blockSize counts the contiguous run of option-shaped lines containing idx.
+func (s Screen) blockSize(idx int) int {
+	if idx < 0 || idx >= len(s.Lines) || !isOptionShaped(s.Lines[idx]) {
+		return 0
 	}
-	return false
+	n := 1
+	for i := idx - 1; i >= 0 && isOptionShaped(s.Lines[i]); i-- {
+		n++
+	}
+	for i := idx + 1; i < len(s.Lines) && isOptionShaped(s.Lines[i]); i++ {
+		n++
+	}
+	return n
 }
 
 // Fingerprint returns a comparison key for deciding whether a pane has settled.
