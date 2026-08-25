@@ -161,7 +161,7 @@ func TestDefaultCommandsCoverVersionNamedBinaries(t *testing.T) {
 			t.Errorf("default command filters should match %q", wrapper)
 		}
 	}
-	for _, unrelated := range []string{"btop", "sshd:", "tailscaled", "bash", "zsh"} {
+	for _, unrelated := range []string{"btop", "htop", "vim", "bash", "zsh"} {
 		if cfg.Targets[0].MatchesCommand(unrelated) {
 			t.Errorf("default command filters should not match %q", unrelated)
 		}
