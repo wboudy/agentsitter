@@ -33,7 +33,9 @@ func (d Duration) MarshalText() ([]byte, error) { return []byte(d.String()), nil
 type Config struct {
 	// PollInterval is the delay between sweeps of every target.
 	PollInterval Duration `toml:"poll_interval"`
-	// CaptureLines is how many rows are pulled from the bottom of each pane.
+	// CaptureLines is how many rows are kept from the bottom of each pane's
+	// visible screen. Scrollback is never read: an answered prompt lingers
+	// there and would make verification fail forever.
 	CaptureLines int `toml:"capture_lines"`
 	// MatchLines is how many of those rows rules are matched against. Keeping
 	// this smaller than CaptureLines anchors matching near the prompt and stops
@@ -115,7 +117,10 @@ type Target struct {
 	SSH string `toml:"ssh"`
 	// SSHArgs are extra arguments passed to ssh before the destination.
 	SSHArgs []string `toml:"ssh_args"`
-	// Socket is a tmux socket name (tmux -L). Defaults to "default".
+	// Socket is a tmux socket name (tmux -L). The special value "*" means
+	// every socket with a live server, which is the default: agents do not
+	// always live on tmux's "default" socket, and a watcher that assumes they
+	// do silently watches nothing.
 	Socket string `toml:"socket"`
 	// SocketPath is a tmux socket path (tmux -S), taking priority over Socket.
 	SocketPath string `toml:"socket_path"`
@@ -208,8 +213,11 @@ func Default() Config {
 
 // DefaultTarget watches the local tmux server's agent panes.
 func DefaultTarget() Target {
-	return Target{Name: "local", Socket: "default", Commands: DefaultCommands()}
+	return Target{Name: "local", Socket: DiscoverSockets, Commands: DefaultCommands()}
 }
+
+// DiscoverSockets is the socket value meaning "find them all".
+const DiscoverSockets = "*"
 
 // DefaultCommands lists the foreground process names that identify an agent
 // pane. The bare version-number pattern is not a typo: some agent CLIs install
@@ -271,7 +279,7 @@ func Load(path string) (Config, error) {
 	data, err := os.ReadFile(expanded)
 	switch {
 	case errors.Is(err, os.ErrNotExist):
-		if err := cfg.finalize(); err != nil {
+		if err := cfg.Finalize(); err != nil {
 			return cfg, err
 		}
 		return cfg, nil
@@ -287,14 +295,16 @@ func Load(path string) (Config, error) {
 	if _, err := toml.Decode(string(data), &cfg); err != nil {
 		return cfg, fmt.Errorf("parse config %s: %w", expanded, err)
 	}
-	if err := cfg.finalize(); err != nil {
+	if err := cfg.Finalize(); err != nil {
 		return cfg, fmt.Errorf("config %s: %w", expanded, err)
 	}
 	return cfg, nil
 }
 
-// finalize applies fallbacks, compiles patterns, and validates.
-func (c *Config) finalize() error {
+// Finalize applies fallbacks, compiles patterns, and validates. Load calls it;
+// callers assembling a Config by hand must call it before use, or the regex
+// filters will all be empty.
+func (c *Config) Finalize() error {
 	if c.PollInterval.Duration <= 0 {
 		c.PollInterval = Duration{3 * time.Second}
 	}
@@ -344,7 +354,7 @@ func (c *Config) finalize() error {
 	for i := range c.Targets {
 		t := &c.Targets[i]
 		if t.Socket == "" && t.SocketPath == "" {
-			t.Socket = "default"
+			t.Socket = DiscoverSockets
 		}
 		if len(t.Commands) == 0 {
 			t.Commands = DefaultCommands()

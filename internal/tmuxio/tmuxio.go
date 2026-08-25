@@ -11,8 +11,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
-	"strconv"
+	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -235,18 +237,32 @@ func ParsePanes(out string) []Pane {
 	return panes
 }
 
-// Capture returns the bottom `lines` rows of a pane with escape sequences
-// preserved, which is what makes highlight detection possible.
+// Capture returns the bottom `lines` rows of a pane's visible screen, with
+// escape sequences preserved, which is what makes highlight detection possible.
+//
+// Scrollback is deliberately excluded. Passing -S would read back into
+// history, where an already-answered prompt is still sitting; agentsitter would
+// then decide the prompt never cleared, fail every verification, and quarantine
+// perfectly healthy panes. The visible screen is also the honest definition of
+// "is a prompt up right now", since it is exactly what a person would see.
 func (c *Client) Capture(ctx context.Context, paneID string, lines int) (string, error) {
-	if lines <= 0 {
-		lines = 50
-	}
-	out, err := c.run(ctx, "capture-pane", "-p", "-e",
-		"-t", paneID, "-S", "-"+strconv.Itoa(lines))
+	out, err := c.run(ctx, "capture-pane", "-p", "-e", "-t", paneID)
 	if err != nil {
 		return "", err
 	}
-	return string(out), nil
+	return TailLines(string(out), lines), nil
+}
+
+// TailLines keeps at most the last n lines of s.
+func TailLines(s string, n int) string {
+	if n <= 0 {
+		return s
+	}
+	lines := strings.Split(s, "\n")
+	if len(lines) <= n {
+		return s
+	}
+	return strings.Join(lines[len(lines)-n:], "\n")
 }
 
 // SendKeys sends named keys such as "Up", "Down", or "Enter" to a pane.
@@ -278,4 +294,68 @@ func ShellQuote(s string) string {
 		return s
 	}
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// socketDirScript resolves tmux's socket directory the same way tmux does.
+const socketDirScript = `d="${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)"; ls -1 "$d" 2>/dev/null || true`
+
+// SocketDir returns the directory tmux keeps its sockets in on this machine.
+func SocketDir() string {
+	base := os.Getenv("TMUX_TMPDIR")
+	if base == "" {
+		base = "/tmp"
+	}
+	return filepath.Join(base, fmt.Sprintf("tmux-%d", os.Getuid()))
+}
+
+// ListSockets returns the tmux socket names present on the target. Presence of
+// a socket file does not prove a server is alive behind it; stale sockets
+// outlive their servers, and callers are expected to treat ErrNoServer from a
+// later call as an ordinary outcome.
+func (c *Client) ListSockets(ctx context.Context) ([]string, error) {
+	if !c.Remote() {
+		entries, err := os.ReadDir(SocketDir())
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil, nil
+			}
+			return nil, err
+		}
+		var out []string
+		for _, e := range entries {
+			if !e.IsDir() {
+				out = append(out, e.Name())
+			}
+		}
+		sort.Strings(out)
+		return out, nil
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, c.timeout())
+	defer cancel()
+
+	argv := append([]string{}, c.SSHArgs...)
+	argv = append(argv,
+		"-o", "BatchMode=yes",
+		"-o", "ConnectTimeout=10",
+		"-o", "ControlMaster=auto",
+		"-o", "ControlPath="+c.controlPath(),
+		"-o", "ControlPersist="+c.controlPersist(),
+		c.SSH, "--", socketDirScript,
+	)
+	cmd := exec.CommandContext(ctx, "ssh", argv...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("%s: listing tmux sockets: %s", c.Label(), strings.TrimSpace(stderr.String()))
+	}
+
+	var out []string
+	for _, line := range strings.Split(stdout.String(), "\n") {
+		if s := strings.TrimSpace(line); s != "" {
+			out = append(out, s)
+		}
+	}
+	sort.Strings(out)
+	return out, nil
 }

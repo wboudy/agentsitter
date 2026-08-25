@@ -65,9 +65,14 @@ ssh = "user@example.invalid"
 	if !cfg.Targets[1].Remote() || cfg.Targets[1].Label() != "user@example.invalid" {
 		t.Fatalf("unexpected second target: %+v", cfg.Targets[1])
 	}
-	// An omitted socket still gets the tmux default.
-	if cfg.Targets[1].Socket != "default" {
-		t.Fatalf("Socket = %q, want default", cfg.Targets[1].Socket)
+	// An omitted socket means "discover them all". Assuming tmux's "default"
+	// socket would silently watch nothing whenever agents run on a named one.
+	if cfg.Targets[1].Socket != DiscoverSockets {
+		t.Fatalf("Socket = %q, want %q", cfg.Targets[1].Socket, DiscoverSockets)
+	}
+	// An explicitly named socket is left alone.
+	if cfg.Targets[0].Socket != "agents" {
+		t.Fatalf("Socket = %q, want the declared name", cfg.Targets[0].Socket)
 	}
 	// Omitted command filters fall back to the agent-process defaults.
 	if len(cfg.Targets[1].Commands) == 0 {
@@ -101,7 +106,7 @@ func TestBadPatternIsReported(t *testing.T) {
 
 func TestSafetyVeto(t *testing.T) {
 	cfg := Default()
-	if err := cfg.finalize(); err != nil {
+	if err := cfg.Finalize(); err != nil {
 		t.Fatal(err)
 	}
 	if re := cfg.Safety.Veto("Allow the agent to run `rm -rf /srv/data`?"); re == nil {
@@ -123,7 +128,7 @@ func TestTargetFilters(t *testing.T) {
 		Commands:     []string{`^codex$`},
 		ExcludePanes: []string{`^agents:9\.`},
 	}}}
-	if err := cfg.finalize(); err != nil {
+	if err := cfg.Finalize(); err != nil {
 		t.Fatal(err)
 	}
 	tg := cfg.Targets[0]
@@ -140,7 +145,7 @@ func TestTargetFilters(t *testing.T) {
 
 func TestDefaultCommandsCoverVersionNamedBinaries(t *testing.T) {
 	cfg := Config{Targets: []Target{{}}}
-	if err := cfg.finalize(); err != nil {
+	if err := cfg.Finalize(); err != nil {
 		t.Fatal(err)
 	}
 	// Some agent CLIs run from a version-named path, so tmux reports the

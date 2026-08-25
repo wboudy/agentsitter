@@ -146,3 +146,16 @@ func indexOf(xs []string, want string) int {
 	}
 	return -1
 }
+
+func TestTailLines(t *testing.T) {
+	body := "a\nb\nc\nd\ne"
+	if got := TailLines(body, 2); got != "d\ne" {
+		t.Fatalf("TailLines = %q", got)
+	}
+	if got := TailLines(body, 99); got != body {
+		t.Fatalf("asking for more lines than exist should return everything, got %q", got)
+	}
+	if got := TailLines(body, 0); got != body {
+		t.Fatalf("a non-positive count should return everything, got %q", got)
+	}
+}
