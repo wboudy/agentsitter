@@ -403,3 +403,55 @@ func TestOptionNumberReadsPreselectedRow(t *testing.T) {
 		t.Fatal("the angle glyph must still not count as a menu marker")
 	}
 }
+
+func TestRenderedDiffIsNotAMenu(t *testing.T) {
+	// An added line in a rendered diff is painted edge to edge, exactly like a
+	// selected menu entry. Agent output is full of diffs, so this would fire
+	// constantly if extent alone decided the question.
+	raw := strings.Join([]string{
+		"    ⋮",
+		"    624          public_path: public",
+		hl("    625 +        published_answer: $db.published_answer"),
+		"    626        output_format:",
+	}, "\n")
+
+	s := Parse(raw)
+	if !s.isDiffLine(2) {
+		t.Fatal("a numbered diff line should be recognised as diff output")
+	}
+	if got := s.SelectedIndex(); got != -1 {
+		t.Fatalf("SelectedIndex = %d, want -1 (line %q)", got, s.Lines[got].Text)
+	}
+	if s.LooksLikeSelector() {
+		t.Fatal("rendered diff output must not register as an open menu")
+	}
+}
+
+func TestUnifiedDiffIsNotAMenu(t *testing.T) {
+	raw := strings.Join([]string{
+		" context line",
+		hl("+added line one"),
+		"+added line two",
+		"-removed line",
+	}, "\n")
+	if Parse(raw).LooksLikeSelector() {
+		t.Fatal("a unified diff hunk must not register as an open menu")
+	}
+}
+
+func TestDashBulletedMenuStillCounts(t *testing.T) {
+	// A lone dash-bulleted line is a plausible menu option, so the bare
+	// diff shape must require a like-shaped neighbour before it disqualifies.
+	raw := strings.Join([]string{
+		"Do you want to proceed?",
+		hl("- Yes, continue"),
+		"  No",
+	}, "\n")
+	s := Parse(raw)
+	if s.isDiffLine(1) {
+		t.Fatal("a single dash-bulleted option is not diff output")
+	}
+	if !s.LooksLikeSelector() {
+		t.Fatal("a dash-bulleted menu should still register")
+	}
+}

@@ -80,6 +80,14 @@ var (
 	asciiSpin = regexp.MustCompile(`(^|\s)[|/\\-](\s|$)`)
 	yesNoRe   = regexp.MustCompile(`(?i)\((?:y/n|yes/no)\)|\[y/n\]|press enter to|esc to (?:dismiss|cancel|skip)`)
 
+	// Rendered diffs are the other thing on an agent screen that carries a
+	// full-row background: an added or removed line is painted edge to edge,
+	// exactly like a selected menu entry. numberedDiffRe covers the gutter
+	// style agent TUIs use ("625 + text"), bareDiffRe the plain unified form.
+	numberedDiffRe = regexp.MustCompile(`^\s*\d+\s*[+-]\s`)
+	bareDiffRe     = regexp.MustCompile(`^\s*[+-]\s*\S`)
+	diffElisionRe  = regexp.MustCompile(`^\s*[\x{22ee}\x{2026}.]{1,3}\s*$`)
+
 	// composerRe matches an agent's text-input line. Agent CLIs commonly draw
 	// it with a background attribute, which makes it look highlighted even
 	// though nothing is selected and no menu is open.
@@ -365,6 +373,34 @@ func (s Screen) inComposerBlock(idx int) bool {
 	return markers == 1 && s.Lines[start].Marker
 }
 
+// isDiffLine reports whether a line is part of rendered diff output rather
+// than a menu.
+//
+// A bare leading "+" or "-" is not enough on its own, because a menu may
+// legitimately bullet its options with a dash, so that form additionally
+// requires a like-shaped neighbour in the same block.
+func (s Screen) isDiffLine(idx int) bool {
+	if idx < 0 || idx >= len(s.Lines) {
+		return false
+	}
+	text := s.Lines[idx].Text
+	if numberedDiffRe.MatchString(text) || diffElisionRe.MatchString(text) {
+		return true
+	}
+	if !bareDiffRe.MatchString(text) {
+		return false
+	}
+	start, end := s.blockBounds(idx)
+	n := 0
+	for i := start; i <= end; i++ {
+		t := s.Lines[i].Text
+		if numberedDiffRe.MatchString(t) || bareDiffRe.MatchString(t) {
+			n++
+		}
+	}
+	return n >= 2
+}
+
 // SelectedIndex returns the index of the active menu entry, or -1 when nothing
 // looks selected.
 //
@@ -386,7 +422,12 @@ func (s Screen) SelectedIndex() int {
 		func(_ int, l Line) bool { return l.Marker },
 	}
 	for _, pred := range passes {
-		if i := s.findLast(pred); i >= 0 {
+		// Diff output is excluded from every pass, not just the strict ones.
+		// A composer row can legitimately be a pointer in some TUI and so is
+		// only deprioritised, but a diff line is never a menu selection.
+		if i := s.findLast(func(i int, l Line) bool {
+			return pred(i, l) && !s.isDiffLine(i)
+		}); i >= 0 {
 			return i
 		}
 	}
@@ -433,7 +474,7 @@ func (s Screen) LooksLikeSelector() bool {
 		return true
 	}
 	sel := s.SelectedIndex()
-	if sel < 0 || !isOptionShaped(s.Lines[sel]) || s.inComposerBlock(sel) {
+	if sel < 0 || !isOptionShaped(s.Lines[sel]) || s.inComposerBlock(sel) || s.isDiffLine(sel) {
 		return false
 	}
 	if n := s.blockSize(sel); n < 2 || n > maxOptionBlock {

@@ -9,7 +9,9 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -577,19 +579,29 @@ func cmdService(args []string) error {
 
 func cmdExplain(args []string) error {
 	fs, configPath := flagSet("explain")
+	file := fs.String("file", "", "analyse a saved learn capture instead of a live pane")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if fs.NArg() != 1 {
-		return fmt.Errorf("usage: agentsitter explain <pane-id|session:window.pane>")
+	if *file == "" && fs.NArg() != 1 {
+		return fmt.Errorf("usage: agentsitter explain <pane-id|session:window.pane>\n   or: agentsitter explain -file <learn-capture>")
 	}
 
 	e, err := build(*configPath, nil)
 	if err != nil {
 		return err
 	}
-	ex, err := e.Explain(context.Background(), fs.Arg(0))
-	if err != nil {
+
+	var ex *engine.Explanation
+	if *file != "" {
+		// Replaying a recorded screen is how a rule gets written for a prompt
+		// that has already scrolled away.
+		raw, err := readLearnCapture(*file)
+		if err != nil {
+			return err
+		}
+		ex = e.ExplainScreen("capture", filepath.Base(*file), raw)
+	} else if ex, err = e.Explain(context.Background(), fs.Arg(0)); err != nil {
 		return err
 	}
 
@@ -642,4 +654,25 @@ func describeIndex(i int) string {
 		return "nothing is highlighted"
 	}
 	return fmt.Sprintf("line %d", i)
+}
+
+// rawCaptureRe finds the Go-quoted raw screen stored in a learn capture.
+var rawCaptureRe = regexp.MustCompile(`(?s)--- raw capture[^\n]*\n(.*)$`)
+
+// readLearnCapture extracts the original screen, escape sequences and all,
+// from a file written by learn mode.
+func readLearnCapture(path string) (string, error) {
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	m := rawCaptureRe.FindStringSubmatch(string(body))
+	if m == nil {
+		return "", fmt.Errorf("%s does not look like a learn capture", path)
+	}
+	raw, err := strconv.Unquote(strings.TrimSpace(m[1]))
+	if err != nil {
+		return "", fmt.Errorf("%s: cannot decode the raw capture: %w", path, err)
+	}
+	return raw, nil
 }

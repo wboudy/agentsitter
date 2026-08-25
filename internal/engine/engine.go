@@ -716,6 +716,12 @@ func (e *Engine) Explain(ctx context.Context, paneID string) (*Explanation, erro
 	return nil, fmt.Errorf("pane %q not found on any target", paneID)
 }
 
+// ExplainScreen runs the decision logic against a screen captured earlier,
+// which is how a rule gets written for a prompt that has already scrolled away.
+func (e *Engine) ExplainScreen(target, label, raw string) *Explanation {
+	return e.explainScreen(target, tmuxio.Pane{ID: label, Command: "codex"}, raw)
+}
+
 // explainScreen runs the decision logic against an already-captured screen.
 func (e *Engine) explainScreen(target string, pane tmuxio.Pane, raw string) *Explanation {
 	tail := screen.Parse(raw).Tail(e.cfg.MatchLines)
