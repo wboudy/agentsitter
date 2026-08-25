@@ -478,3 +478,64 @@ func TestAuditLogRecordsEveryDecision(t *testing.T) {
 		}
 	}
 }
+
+// fakeDiscoverClient also enumerates sockets.
+type fakeDiscoverClient struct {
+	fakeClient
+	sockets []string
+	calls   int
+}
+
+func (f *fakeDiscoverClient) ListSockets(context.Context) ([]string, error) {
+	f.calls++
+	return f.sockets, nil
+}
+
+func TestResolveExpandsDiscoveringTargetPerSocket(t *testing.T) {
+	h := newHarness(t, []string{"idle"}, nil)
+	fake := &fakeDiscoverClient{sockets: []string{"agents", "default"}}
+	h.engine.NewClient = func(config.Target) PaneClient { return fake }
+	h.engine.clients = map[string]PaneClient{}
+
+	got := h.engine.Resolve(context.Background(), config.Target{
+		Name: "local", Socket: config.DiscoverSockets,
+	})
+	if len(got) != 2 {
+		t.Fatalf("resolved %d targets, want one per socket", len(got))
+	}
+	if got[0].Socket != "agents" || got[0].Label() != "local:agents" {
+		t.Fatalf("unexpected target: %+v", got[0])
+	}
+	if got[1].Socket != "default" || got[1].Label() != "local:default" {
+		t.Fatalf("unexpected target: %+v", got[1])
+	}
+}
+
+func TestResolveCachesDiscovery(t *testing.T) {
+	h := newHarness(t, []string{"idle"}, nil)
+	fake := &fakeDiscoverClient{sockets: []string{"agents"}}
+	h.engine.NewClient = func(config.Target) PaneClient { return fake }
+	h.engine.clients = map[string]PaneClient{}
+
+	target := config.Target{Name: "local", Socket: config.DiscoverSockets}
+	for i := 0; i < 5; i++ {
+		h.engine.Resolve(context.Background(), target)
+	}
+	if fake.calls != 1 {
+		t.Fatalf("ListSockets called %d times, want it cached to 1 inside the TTL", fake.calls)
+	}
+}
+
+func TestResolveLeavesNamedSocketAlone(t *testing.T) {
+	h := newHarness(t, []string{"idle"}, nil)
+	fake := &fakeDiscoverClient{sockets: []string{"other"}}
+	h.engine.NewClient = func(config.Target) PaneClient { return fake }
+
+	got := h.engine.Resolve(context.Background(), config.Target{Name: "x", Socket: "agents"})
+	if len(got) != 1 || got[0].Socket != "agents" {
+		t.Fatalf("a named socket should resolve to itself, got %+v", got)
+	}
+	if fake.calls != 0 {
+		t.Fatal("a named socket should not trigger discovery")
+	}
+}

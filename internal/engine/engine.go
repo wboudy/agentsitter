@@ -48,6 +48,7 @@ type Engine struct {
 
 	clients  map[string]PaneClient
 	trackers map[string]*tracker
+	sockets  map[string]socketCache
 
 	// NewClient builds the transport for a target. Tests replace it.
 	NewClient func(config.Target) PaneClient
@@ -85,6 +86,7 @@ func New(cfg config.Config, rs *rules.Set, g *guard.Guard, lg *audit.Logger, out
 		out:       out,
 		clients:   map[string]PaneClient{},
 		trackers:  map[string]*tracker{},
+		sockets:   map[string]socketCache{},
 		Now:       time.Now,
 		NewClient: dialTmux,
 	}
@@ -167,11 +169,66 @@ func (e *Engine) pruneTrackers() {
 	}
 }
 
+// socketCacheTTL bounds how long a discovered socket list is reused before
+// agentsitter looks again, so a tmux server started after startup is picked up.
+const socketCacheTTL = 30 * time.Second
+
+// socketCache remembers one target's discovered sockets.
+type socketCache struct {
+	sockets []string
+	at      time.Time
+}
+
+// socketLister is implemented by transports that can enumerate tmux sockets.
+type socketLister interface {
+	ListSockets(ctx context.Context) ([]string, error)
+}
+
+// Resolve expands a target into one concrete target per tmux socket. A target
+// naming its socket resolves to itself; one asking to discover resolves to
+// every socket present on the machine.
+func (e *Engine) Resolve(ctx context.Context, t config.Target) []config.Target {
+	if t.SocketPath != "" || t.Socket != config.DiscoverSockets {
+		return []config.Target{t}
+	}
+	lister, ok := e.Client(t).(socketLister)
+	if !ok {
+		return []config.Target{t}
+	}
+
+	key := t.Label()
+	now := e.Now()
+	cached, hit := e.sockets[key]
+	if !hit || now.Sub(cached.at) > socketCacheTTL {
+		names, err := lister.ListSockets(ctx)
+		if err != nil {
+			// Fall back to whatever was last known rather than going blind.
+			if !hit {
+				return nil
+			}
+		} else {
+			cached = socketCache{sockets: names, at: now}
+			e.sockets[key] = cached
+		}
+	}
+
+	out := make([]config.Target, 0, len(cached.sockets))
+	for _, name := range cached.sockets {
+		sub := t
+		sub.Socket = name
+		sub.Name = t.Label() + ":" + name
+		out = append(out, sub)
+	}
+	return out
+}
+
 // Sweep polls every target once.
 func (e *Engine) Sweep(ctx context.Context) Result {
 	var res Result
 	for _, target := range e.cfg.Targets {
-		e.sweepTarget(ctx, target, &res)
+		for _, resolved := range e.Resolve(ctx, target) {
+			e.sweepTarget(ctx, resolved, &res)
+		}
 	}
 	return res
 }
@@ -495,4 +552,151 @@ func (e *Engine) emit(ctx context.Context, ev audit.Event, res *Result) {
 			res.Errors = append(res.Errors, err)
 		}
 	}
+}
+
+// PaneInfo is one pane and whether agentsitter would watch it.
+type PaneInfo struct {
+	Target  string
+	Pane    tmuxio.Pane
+	Watched bool
+	Reason  string
+}
+
+// Config exposes the engine's configuration for reporting.
+func (e *Engine) Config() config.Config { return e.cfg }
+
+// Rules exposes the active rule set for reporting.
+func (e *Engine) Rules() *rules.Set { return e.rules }
+
+// Guard exposes the rate limiter for reporting.
+func (e *Engine) Guard() *guard.Guard { return e.guard }
+
+// Inventory lists every pane on every target with the filter verdict, which is
+// what `agentsitter panes` reports.
+func (e *Engine) Inventory(ctx context.Context) ([]PaneInfo, []error) {
+	var (
+		out  []PaneInfo
+		errs []error
+	)
+	for _, target := range e.cfg.Targets {
+		for _, resolved := range e.Resolve(ctx, target) {
+			panes, err := e.Client(resolved).ListPanes(ctx)
+			if err != nil {
+				if !errors.Is(err, tmuxio.ErrNoServer) {
+					errs = append(errs, err)
+				}
+				continue
+			}
+			for _, p := range panes {
+				out = append(out, PaneInfo{
+					Target:  resolved.Label(),
+					Pane:    p,
+					Watched: e.watchable(resolved, p),
+					Reason:  e.skipReason(resolved, p),
+				})
+			}
+		}
+	}
+	return out, errs
+}
+
+// skipReason explains why a pane is not watched, or "" when it is.
+func (e *Engine) skipReason(t config.Target, p tmuxio.Pane) string {
+	switch {
+	case p.Dead:
+		return "pane is dead"
+	case p.InMode:
+		return "pane is in copy mode"
+	case e.cfg.SkipActivePane && p.Active:
+		return "active pane, skip_active_pane is on"
+	case !t.MatchesSession(p.Session):
+		return "session does not match the target filter"
+	case !t.MatchesCommand(p.Command):
+		return "process " + p.Command + " is not an agent"
+	case t.Excluded(p.Addr()):
+		return "pane is in exclude_panes"
+	}
+	return ""
+}
+
+// Explanation is a decision traced against one pane, for `agentsitter explain`.
+// It is the tool for authoring and debugging rules: it shows exactly what
+// agentsitter sees, which lines it considers selected, and what it would do.
+type Explanation struct {
+	Target     string
+	Pane       tmuxio.Pane
+	Raw        string
+	Tail       screen.Screen
+	Selected   int
+	Selector   bool
+	Vetoed     string
+	Candidates []Candidate
+}
+
+// Candidate is one rule's verdict on a pane.
+type Candidate struct {
+	Rule    string
+	Option  string
+	Keys    []string
+	Failure string
+}
+
+// Explain captures a pane and reports what agentsitter would decide about it,
+// without sending anything.
+func (e *Engine) Explain(ctx context.Context, paneID string) (*Explanation, error) {
+	for _, target := range e.cfg.Targets {
+		for _, resolved := range e.Resolve(ctx, target) {
+			client := e.Client(resolved)
+			panes, err := client.ListPanes(ctx)
+			if err != nil {
+				continue
+			}
+			for _, p := range panes {
+				if p.ID != paneID && p.Addr() != paneID {
+					continue
+				}
+				raw, err := client.Capture(ctx, p.ID, e.cfg.CaptureLines)
+				if err != nil {
+					return nil, err
+				}
+				return e.explainScreen(resolved.Label(), p, raw), nil
+			}
+		}
+	}
+	return nil, fmt.Errorf("pane %q not found on any target", paneID)
+}
+
+// explainScreen runs the decision logic against an already-captured screen.
+func (e *Engine) explainScreen(target string, pane tmuxio.Pane, raw string) *Explanation {
+	tail := screen.Parse(raw).Tail(e.cfg.MatchLines)
+	text := tail.Text()
+
+	ex := &Explanation{
+		Target:   target,
+		Pane:     pane,
+		Raw:      raw,
+		Tail:     tail,
+		Selected: tail.SelectedIndex(),
+		Selector: tail.LooksLikeSelector(),
+	}
+	if re := e.cfg.Safety.Veto(text); re != nil {
+		ex.Vetoed = re.String()
+	}
+	for _, rule := range e.rules.Candidates(pane.Command, text) {
+		c := Candidate{Rule: rule.Name}
+		p, err := e.plan(rule, tail)
+		switch {
+		case err != nil:
+			c.Failure = err.Error()
+		case len(p.keys) > 0:
+			c.Keys = p.keys
+		case p.digit != "":
+			c.Option, c.Keys = p.optionText, []string{p.digit}
+		default:
+			c.Option = p.optionText
+			c.Keys = append(append([]string{}, p.moves...), p.submit)
+		}
+		ex.Candidates = append(ex.Candidates, c)
+	}
+	return ex
 }
