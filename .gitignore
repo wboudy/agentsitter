@@ -1,0 +1,5 @@
+/dist/
+/agentsitter
+*.test
+*.out
+.DS_Store
